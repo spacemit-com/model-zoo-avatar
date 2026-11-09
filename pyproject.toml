@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel", "pybind11>=3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "spacemit-feathertalk"
+name = "spacemit-avatar"
 dynamic = ["version"]
 description = "C++ UNet and FeatherHuBERT inference with process-isolated Python examples"
 readme = "README.md"

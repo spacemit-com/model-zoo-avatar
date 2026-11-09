@@ -1,4 +1,4 @@
-# Avatar 数字人推理组件
+# bianbu-avatar 数字人推理组件
 
 独立抽取 bianbu-avatar 的 **FeatherHuBERT 音频特征 + 人物 UNet 唇形生成**。C++17 实现推理和前后处理，pybind11 提供 NumPy 接口；离线完整示例以两个原生子进程隔离 CPU/EP 的 ORT。没有 ASR、LLM、TTS、摄像头检测、WebRTC 或 systemd 服务依赖。
 
@@ -29,7 +29,7 @@ bash scripts/download_models.sh --dry-run
 bash scripts/download_models.sh --offline
 ```
 
-资源写入 `~/.cache/models/feathertalk/` 与 `~/.cache/assets/feathertalk/`。通过 `--models-dir`、`--assets-dir` 和 `--cache-dir` 可指定位置；修改位置后同步修改 YAML。
+资源写入 `~/.cache/models/avatar/` 与 `~/.cache/assets/avatar/`。通过 `--models-dir`、`--assets-dir` 和 `--cache-dir` 可指定位置；修改位置后同步修改 YAML。
 
 清单 `config/resources.json` 引用资源服务器 `model_zoo/avatar/` 下 bianbu-avatar 的 20261021-r1 发布资源。人物历史 tar 同时包含权重和素材，下载器只解出本次选中的成员；首次下载该人物任一成员仍需下载整个约64MB归档，后续模型/素材共享缓存。音频是驱动嘴型的测试录音，不是克隆音色参考录音。
 
@@ -52,12 +52,12 @@ ctest --test-dir build --output-on-failure
 ## 3. C++ 离线示例
 
 ```bash
-export FEATHERTALK_WORKER="$PWD/build/feathertalk_worker"
+export AVATAR_WORKER="$PWD/build/avatar_worker"
 bash examples/cpp/run_pipeline.sh configs/cpu.yaml \
-  ~/.cache/assets/feathertalk/audio/speech.wav output/demo-frames
+  ~/.cache/assets/avatar/audio/speech.wav output/demo-frames
 # 合成带原音轨的视频（FFmpeg仅是示例输出工具）
 ffmpeg -framerate 25 -i output/demo-frames/%08d.png \
-  -i ~/.cache/assets/feathertalk/audio/speech.wav \
+  -i ~/.cache/assets/avatar/audio/speech.wav \
   -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest output/demo.mp4
 ```
 
@@ -65,7 +65,7 @@ WAV 必须为16kHz、单声道、PCM16；其它输入先用 FFmpeg 转换。输�
 
 zihan配套示例使用 `configs/zihan.cpu.yaml`。同一人物的UNet与assets需同时下载，不要只改模型路径而留下另一人物的素材。
 
-`configs/k3.yaml` 与 `configs/zihan.k3.yaml` 显式选择 SpaceMIT EP，核分配与 bianbu-avatar 长对话配置一致：FeatherHuBERT 在 X100 0–7 用 CPU 4线程；UNet worker 进程及 ORT 的4个 CPU 回退线程在 X100 0–7，2个 EP 线程绑定 A100 12、13（bianbu-avatar 默认配置为 10、11）。只设置 `ep_affinity` 不能把 EP 限定在这两个核上：EP 会在每个可用的 A100 核上各起一个线程。需像 bianbu-avatar 的 systemd 服务一样，在只允许 X100 0–7 和所选 A100 核的 cgroup 中运行，例如 `sudo systemd-run --scope -p AllowedCPUs=0-7,12-13 bash examples/cpp/run_pipeline.sh configs/k3.yaml …`。K3 实测该方式需配合 bianbu-avatar 随包的 EP 2.0.7 运行库；系统 EP 2.0.8 在受限 cgroup 中仍会在其它 A100 核上起线程。请按实际安装设置其中的 `ort_library`、`ep_library` 和 affinity。需要分别使用不同 ORT 时，Python示例的两个worker进程已隔离；可用 `FEATHERTALK_HUBERT_LIBRARY_DIR` 与 `FEATHERTALK_UNET_LIBRARY_DIR` **仅设置子进程**库搜索路径。系统部署还应保证cpuset允许所选EP核。示例不修改主机核分配，也不自动占用其它推理服务的核心。
+`configs/k3.yaml` 与 `configs/zihan.k3.yaml` 显式选择 SpaceMIT EP，核分配与 bianbu-avatar 长对话配置一致：FeatherHuBERT 在 X100 0–7 用 CPU 4线程；UNet worker 进程及 ORT 的4个 CPU 回退线程在 X100 0–7，2个 EP 线程绑定 A100 12、13（bianbu-avatar 默认配置为 10、11）。只设置 `ep_affinity` 不能把 EP 限定在这两个核上：EP 会在每个可用的 A100 核上各起一个线程。需像 bianbu-avatar 的 systemd 服务一样，在只允许 X100 0–7 和所选 A100 核的 cgroup 中运行，例如 `sudo systemd-run --scope -p AllowedCPUs=0-7,12-13 bash examples/cpp/run_pipeline.sh configs/k3.yaml …`。K3 实测该方式需配合 bianbu-avatar 随包的 EP 2.0.7 运行库；系统 EP 2.0.8 在受限 cgroup 中仍会在其它 A100 核上起线程。请按实际安装设置其中的 `ort_library`、`ep_library` 和 affinity。需要分别使用不同 ORT 时，Python示例的两个worker进程已隔离；可用 `AVATAR_HUBERT_LIBRARY_DIR` 与 `AVATAR_UNET_LIBRARY_DIR` **仅设置子进程**库搜索路径。系统部署还应保证cpuset允许所选EP核。示例不修改主机核分配，也不自动占用其它推理服务的核心。
 
 ## 4. Python wheel 与示例
 
@@ -73,17 +73,17 @@ zihan配套示例使用 `configs/zihan.cpu.yaml`。同一人物的UNet与assets�
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m build --wheel --no-isolation
-python -m pip install --no-deps dist/spacemit_feathertalk-*.whl
+python -m pip install --no-deps dist/spacemit_avatar-*.whl
 python examples/python/render_file.py --config configs/cpu.yaml \
-  --audio ~/.cache/assets/feathertalk/audio/speech.wav \
+  --audio ~/.cache/assets/avatar/audio/speech.wav \
   --output output/python-frames --max-frames 25
 ```
 
-完整示例是**离线两阶段**处理，不宣称Python层边合成边播放或实时逐帧输出。`FeatherTalkService.render_file` 返回帧目录、帧数及分阶段耗时；`cancel/close` 管理真实worker生命周期。低层API的 `FeatherHubertExtractor.push_pcm` 支持流式输入与final/reset。
+完整示例是**离线两阶段**处理，不宣称Python层边合成边播放或实时逐帧输出。`AvatarService.render_file` 返回帧目录、帧数及分阶段耗时；`cancel/close` 管理真实worker生命周期。低层API的 `FeatherHubertExtractor.push_pcm` 支持流式输入与final/reset。
 
 ```python
 import numpy as np
-from spacemit_feathertalk import RuntimeOptions, FeatherHubertExtractor
+from spacemit_avatar import RuntimeOptions, FeatherHubertExtractor
 options = RuntimeOptions()
 options.ort_library = "/path/to/matched/cpu/libonnxruntime.so"
 extractor = FeatherHubertExtractor("/path/to/feather_hubert_dynamic.onnx", options)
@@ -96,11 +96,11 @@ extractor.reset()
 
 上述运行库检查只覆盖本组件自己的初始化路径；无法替其它Python扩展管理已加载的ORT。直接调用低层接口时，不要在同进程选择与其它扩展不同的运行库。高层离线接口默认通过独立worker避免这类混装。取消是协作式的：worker收到信号后，在当前推理返回的安全点退出；关闭/超时最终会回收子进程。取消或失败时保留已有的部分PNG，不能把它们当作完整结果。
 
-wheel 采用 CPython 3.14 `linux_riscv64` 标签，运行时使用系统 OpenCV、yaml-cpp 和配置指定的 ORT。CMake 安装到 SDK staging 时，Python 包位于前缀的 `lib/python3.14/site-packages`，可用 `FEATHERTALK_PYTHON_INSTALL_DIR` 设置相对路径。使用该布局时，将前缀的 `bin` 加入 `PATH`。
+wheel 采用 CPython 3.14 `linux_riscv64` 标签，运行时使用系统 OpenCV、yaml-cpp 和配置指定的 ORT。CMake 安装到 SDK staging 时，Python 包位于前缀的 `lib/python3.14/site-packages`，可用 `AVATAR_PYTHON_INSTALL_DIR` 设置相对路径。使用该布局时，将前缀的 `bin` 加入 `PATH`。
 
 ## 5. 测试与 SDK 集成
 
-SDK 根目录下的 `avatar/` 与 `vision/` 同级。在 SDK 根目录加载 `source build/envsetup.sh`，进入 `avatar/` 后执行 `mm -py`。原生库、头文件、绑定和 worker 安装到 `output/staging`，wheel 写入 `output/wheels/avatar`。组件内的 FeatherTalk 模型接口、Python 包 `spacemit_feathertalk` 和 `feathertalk_worker` 命令继续沿用。单配置 CMake 默认用 `Release`，也可显式指定 `CMAKE_BUILD_TYPE`。
+SDK 根目录下的 `avatar/` 与 `vision/` 同级。在 SDK 根目录加载 `source build/envsetup.sh`，进入 `avatar/` 后执行 `mm -py`。原生库、头文件、绑定和 worker 安装到 `output/staging`，wheel 写入 `output/wheels/avatar`。C++ 接口位于 `avatar_service.h`（命名空间 `SpacemiT::avatar`），Python 包为 `spacemit_avatar`，命令行程序为 `avatar_worker`。单配置 CMake 默认用 `Release`，也可显式指定 `CMAKE_BUILD_TYPE`。
 
 生产 worker 源码在 `src/cli/`，`examples/` 保留调用示例。独立仓库的 GitHub Actions 与 `test.yaml` 的 PR 项共用 `tests/run_sdk_test.sh`，执行 Python 单测、C++ 合约和安装后的加载检查。真实 ONNX 对照继续在准备好模型和运行库的环境中按需运行，详见 [验证方法](docs/VALIDATION.md)。
 

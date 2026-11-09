@@ -1,4 +1,4 @@
-#include "feathertalk_service.h"
+#include "avatar_service.h"
 #include "internal.h"
 #include <algorithm>
 #include <cmath>
@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <filesystem>
 #include <chrono>
-using namespace feathertalk;
+using namespace SpacemiT::avatar;
 void require(bool x,const char* message){if(!x)throw std::runtime_error(message);}
 int main(){
  try{

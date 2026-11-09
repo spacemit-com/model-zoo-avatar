@@ -1,5 +1,5 @@
 // Extracted from bianbu-avatar; exact upstream blocks tracked in config/source-baseline.json.
-#include "feathertalk_service.h"
+#include "avatar_service.h"
 #include "non_reentrant.h"
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
@@ -7,7 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
-namespace feathertalk::detail {
+namespace SpacemiT::avatar::detail {
 namespace fs=std::filesystem;
 constexpr int kFaceSize=168,kInnerOffset=4,kInnerSize=160;
 struct FrameAsset {cv::Mat face;cv::Rect bbox,mouthRoi;};
@@ -190,7 +190,7 @@ cv::Mat createAlpha(
 std::vector<float> createImageInput(const cv::Mat& face) {
     const cv::Mat inner = face(cv::Rect(kInnerOffset, kInnerOffset, kInnerSize, kInnerSize));
     cv::Mat masked = inner.clone();
-    // Match the original FeatherTalk preprocessing exactly. cv::Rect uses an
+    // Match the original preprocessing exactly. cv::Rect uses an
     // exclusive right/bottom edge, so this covers x=[5,154], y=[5,149]. The
     // previous Point overload covered only x=[5,150], y=[5,145], changing the
     // model input distribution and producing unstable first mouth frames.
@@ -547,7 +547,7 @@ void pasteResidualFace(const cv::Mat& generatedFace, const cv::Mat& referenceFac
 }
 
 } // namespace detail
-namespace feathertalk {
+namespace SpacemiT::avatar {
 struct PreparedFrame::Impl {
     std::mutex mutex;detail::FrameAsset asset; cv::Mat base,alpha;
     std::vector<float> input;RenderOptions options;detail::FacePostprocessScratch scratch;

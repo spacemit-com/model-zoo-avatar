@@ -1,7 +1,7 @@
 #pragma once
-#include "feathertalk_service.h"
+#include "avatar_service.h"
 #include <onnxruntime_cxx_api.h>
-namespace feathertalk::detail {
+namespace SpacemiT::avatar::detail {
 void InitRuntime(const std::string& library);
 Ort::Env& Environment();
 Ort::SessionOptions SessionOptions(const RuntimeOptions& options);

@@ -1,10 +1,10 @@
-#include "feathertalk_service.h"
+#include "avatar_service.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <cstring>
 namespace py=pybind11;
-using namespace feathertalk;
+using namespace SpacemiT::avatar;
 template<class T>void check(const py::array& a){if(!a.dtype().is(py::dtype::of<T>())||!(a.flags()&py::array::c_style))throw py::value_error("Expected exact native dtype and C-contiguous array");}
 template<class T>
 std::vector<T> copy(const py::array& a) {
@@ -26,8 +26,8 @@ std::vector<cv::Point2f> points(const py::array& a) {
     return out;
 }
 bool shape(const py::array& a,const std::vector<py::ssize_t>& dims){if(a.ndim()!=static_cast<py::ssize_t>(dims.size()))return false;for(std::size_t i=0;i<dims.size();++i)if(a.shape(i)!=dims[i])return false;return true;}
-PYBIND11_MODULE(_feathertalk,m){
- m.doc()="FeatherTalk C++17 two-model inference; one ORT binary per process";
+PYBIND11_MODULE(_spacemit_avatar,m){
+ m.doc()="bianbu-avatar C++17 two-model inference; one ORT binary per process";
  py::class_<RuntimeOptions>(m,"RuntimeOptions").def(py::init<>()).def_readwrite("ort_library",&RuntimeOptions::ort_library).def_readwrite("provider",&RuntimeOptions::provider).def_readwrite("ep_library",&RuntimeOptions::ep_library).def_readwrite("ep_affinity",&RuntimeOptions::ep_affinity).def_readwrite("profile_prefix",&RuntimeOptions::profile_prefix).def_readwrite("threads",&RuntimeOptions::threads).def_readwrite("ep_threads",&RuntimeOptions::ep_threads);
  py::class_<RenderOptions>(m,"RenderOptions").def(py::init<>()).def_readwrite("feather",&RenderOptions::feather).def_readwrite("mouth_only_blend",&RenderOptions::mouth_only_blend).def_readwrite("native_pasteback",&RenderOptions::native_pasteback).def_readwrite("temporal_smooth",&RenderOptions::temporal_smooth).def_readwrite("mouth_sharpen",&RenderOptions::mouth_sharpen).def_readwrite("smooth_alpha",&RenderOptions::smooth_alpha).def_readwrite("patch_lowpass",&RenderOptions::patch_lowpass);
  py::class_<FeatureBatch>(m,"FeatureBatch").def_property_readonly("windows",[](const FeatureBatch& b){return tensor(b.values,{static_cast<py::ssize_t>(b.size()),16,32,32});}).def_readonly("frame_ids",&FeatureBatch::frame_ids);
@@ -46,5 +46,5 @@ PYBIND11_MODULE(_feathertalk,m){
  .def("compose",[](PreparedFrame& f,const py::array& a){if(!shape(a,{1,3,160,160}))throw py::value_error("Expected output [1,3,160,160]");auto data=copy<float>(a);cv::Mat out;{py::gil_scoped_release g;out=f.Compose(data);}py::array_t<std::uint8_t> result({out.rows,out.cols,3});std::memcpy(result.mutable_data(),out.data,out.total()*3);return result;})
  .def("reset",&PreparedFrame::Reset);
  m.def("runtime_version",&RuntimeVersion);
- m.attr("__version__")=FEATHERTALK_VERSION;
+ m.attr("__version__")=AVATAR_VERSION;
 }

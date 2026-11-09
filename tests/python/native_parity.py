@@ -8,10 +8,10 @@ from pathlib import Path
 import numpy as np
 
 def native():
- try:import _feathertalk as n
+ try:import _spacemit_avatar as n
  except ModuleNotFoundError as e:
-  if e.name!='_feathertalk':raise
-  from spacemit_feathertalk import _feathertalk as n
+  if e.name!='_spacemit_avatar':raise
+  from spacemit_avatar import _spacemit_avatar as n
  return n
 def features(a):
  import onnxruntime as ort

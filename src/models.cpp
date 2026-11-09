@@ -4,7 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <array>
-namespace feathertalk {
+namespace SpacemiT::avatar {
 struct FeatherHubertExtractor::Impl {
     std::mutex mutex;
     std::unique_ptr<Ort::Session> session;

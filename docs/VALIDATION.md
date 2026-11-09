@@ -10,7 +10,7 @@ bash tests/run_sdk_test.sh installed
 
 `core` 使用合成输入检查 C++ 合约。`installed` 将 CMake 产物安装到临时前缀，从源码目录外加载 Python 原生绑定并启动 worker，检查动态库布局。GitHub Actions 在 Ubuntu 上运行这三项。Windows 可直接用 `python -m unittest discover -s tests/python -p 'test_*.py' -v` 运行主机测试。
 
-在 K3 上设置 `FEATHERTALK_TEST_CPU_ORT`、`FEATHERTALK_TEST_HUBERT` 和 `FEATHERTALK_TEST_UNET` 后，运行 `bash tests/run_sdk_test.sh parity`。设置 `FEATHERTALK_TEST_UNET_ALT` 可顺带检查第二套人物权重。传入的路径应为绝对路径。此入口对应 `test.yaml` 的 `manual` 和 `release` 范围。
+在 K3 上设置 `AVATAR_TEST_CPU_ORT`、`AVATAR_TEST_HUBERT` 和 `AVATAR_TEST_UNET` 后，运行 `bash tests/run_sdk_test.sh parity`。设置 `AVATAR_TEST_UNET_ALT` 可顺带检查第二套人物权重。传入的路径应为绝对路径。此入口对应 `test.yaml` 的 `manual` 和 `release` 范围。
 
 构建后 `ctest --test-dir build --output-on-failure` 检查静音、frame id、final/reset、遮罩边界、图像输出形状和非法输入。下载器测试不加载模型，使用真实本地HTTP续传及临时tar文件。
 
