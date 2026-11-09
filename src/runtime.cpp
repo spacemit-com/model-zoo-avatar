@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <map>
 
-namespace feathertalk::detail {
+namespace SpacemiT::avatar::detail {
 namespace {
 std::mutex lock;
 std::string selected;
@@ -43,7 +43,7 @@ void InitRuntime(const std::string& library) {
     Ort::InitApi(api); selected = identity; version = get()->GetVersionString();
     dlclose(handle);
 }
-Ort::Env& Environment() { static Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "feathertalk"); return env; }
+Ort::Env& Environment() { static Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "avatar"); return env; }
 Ort::SessionOptions SessionOptions(const RuntimeOptions& o) {
     if (o.threads < 1 || o.threads > 256 || o.ep_threads < 1 || o.ep_threads > 64) throw std::invalid_argument("Invalid thread count");
     Ort::SessionOptions so;
@@ -77,6 +77,6 @@ void CheckTensor(const Ort::Value& v, const std::vector<std::int64_t>& shape) {
         throw std::runtime_error("Unexpected tensor dtype or shape");
 }
 }
-namespace feathertalk {
+namespace SpacemiT::avatar {
 std::string RuntimeVersion() { std::lock_guard<std::mutex> guard(detail::lock); return detail::selected.empty()?"not-loaded":detail::version; }
 }

@@ -1,10 +1,10 @@
 #pragma once
-#include "feathertalk_service.h"
+#include "avatar_service.h"
 #include <functional>
 #include <fstream>
 #include <cstdio>
 #include <utility>
-namespace feathertalk::detail {
+namespace SpacemiT::avatar::detail {
 using HiddenRunner = std::function<std::vector<float>(const std::vector<float>&)>;
 class FeatureStream {
 public:

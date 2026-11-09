@@ -9,20 +9,20 @@ schema: 1
 # starts one worker per A100 core and computes on the first ones. Run the
 # worker in a cgroup that allows only X100 0-7 plus the selected A100 cores, as
 # the bianbu-avatar systemd unit does:
-#   systemd-run --scope -p AllowedCPUs=0-7,12-13 feathertalk_worker ...
+#   systemd-run --scope -p AllowedCPUs=0-7,12-13 avatar_worker ...
 # Measured on K3 with the EP 2.0.7 runtime bundled by bianbu-avatar. System EP
 # 2.0.8 still started workers on excluded A100 cores inside such a cgroup.
 # Provider selection alone does not prove full Resize coverage. System 2.0.8
 # showed four CPU Resize events on the tested board. Select a validated closure
 # explicitly when requiring all-EP UNet, then run scripts/verify_ep_profile.py.
 hubert:
-  model: ~/.cache/models/feathertalk/feather_hubert_dynamic.onnx
+  model: ~/.cache/models/avatar/feather_hubert_dynamic.onnx
   provider: cpu
   ort_library: libonnxruntime.so
   threads: 4
   cpu_affinity: [0, 1, 2, 3, 4, 5, 6, 7]
 unet:
-  model: ~/.cache/models/feathertalk/zihan_int8.onnx
+  model: ~/.cache/models/avatar/zihan_int8.onnx
   provider: spacemit
   ort_library: libonnxruntime.so
   ep_library: libspacemit_ep.so
@@ -31,7 +31,7 @@ unet:
   ep_threads: 2
   ep_affinity: "12;13"
 assets:
-  person: ~/.cache/assets/feathertalk/zihan
+  person: ~/.cache/assets/avatar/zihan
 render:
   feather: true
   native_pasteback: true

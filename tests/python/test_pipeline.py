@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'python'))
-from spacemit_feathertalk.pipeline import FeatherTalkService
+from spacemit_avatar.pipeline import AvatarService
 
 @unittest.skipUnless(os.name=='posix','Native process lifecycle targets Linux')
 class ProcessLifecycle(unittest.TestCase):
@@ -25,7 +25,7 @@ class ProcessLifecycle(unittest.TestCase):
  def assert_dead(self,pid):
   with self.assertRaises(ProcessLookupError):os.kill(pid,0)
  def test_cancel_holds_instance_until_child_reaped(self):
-  engine=FeatherTalkService(self.config,self.worker);errors=[]
+  engine=AvatarService(self.config,self.worker);errors=[]
   def run():
    try:engine.render_file(self.audio,self.root/'frames')
    except Exception as e:errors.append(e)
@@ -34,16 +34,16 @@ class ProcessLifecycle(unittest.TestCase):
   engine.cancel();thread.join(3);self.assertFalse(thread.is_alive());self.assertTrue(errors);self.assert_dead(pid);engine.close()
  def test_timeout_kills_and_reaps_child(self):
   self.config.write_text('schema: 1\nhubert:\n  model: unused\n  timeout_s: 0.5\nunet:\n  model: unused\n')
-  with FeatherTalkService(self.config,self.worker) as engine:
+  with AvatarService(self.config,self.worker) as engine:
    with self.assertRaises(TimeoutError):engine.render_file(self.audio,self.root/'frames')
   self.assert_dead(int(self.pidfile.read_text()))
  def test_closed_and_existing_output_are_rejected(self):
-  engine=FeatherTalkService(self.config,self.worker);out=self.root/'frames';out.mkdir();(out/'keep.png').write_bytes(b'keep')
+  engine=AvatarService(self.config,self.worker);out=self.root/'frames';out.mkdir();(out/'keep.png').write_bytes(b'keep')
   with self.assertRaises(FileExistsError):engine.render_file(self.audio,out)
   self.assertEqual((out/'keep.png').read_bytes(),b'keep');engine.close()
   with self.assertRaises(RuntimeError):engine.render_file(self.audio,self.root/'new')
  def test_nonfinite_timeout_rejected(self):
   self.config.write_text('schema: 1\nhubert:\n  model: unused\n  timeout_s: .nan\nunet:\n  model: unused\n')
-  with self.assertRaises(ValueError):FeatherTalkService(self.config,self.worker)
+  with self.assertRaises(ValueError):AvatarService(self.config,self.worker)
 
 if __name__=='__main__':unittest.main()

@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
-namespace feathertalk::detail {
+namespace SpacemiT::avatar::detail {
 void FeatureStream::Reset() { audio_.clear(); total_=emitted_=0; finalized_=false; }
 FeatureBatch FeatureStream::Push(const std::int16_t* pcm, std::size_t n, bool final) {
     if (finalized_) throw std::runtime_error("Stream finalized; reset before adding audio");

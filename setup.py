@@ -10,7 +10,7 @@ class CMakeBuild(build_ext):
         build=Path(self.build_temp).resolve()/ext.name.replace('.','_');build.mkdir(parents=True,exist_ok=True)
         dest=Path(self.build_lib).resolve()
         args=['cmake','-S',str(ROOT),'-B',str(build),'-DCMAKE_BUILD_TYPE=Release',
-              '-DBUILD_TESTING=OFF','-DBUILD_PYTHON_BINDINGS=ON','-DFEATHERTALK_WHEEL_LAYOUT=ON',
+              '-DBUILD_TESTING=OFF','-DBUILD_PYTHON_BINDINGS=ON','-DAVATAR_WHEEL_LAYOUT=ON',
               '-DPython3_EXECUTABLE='+sys.executable,'-DCMAKE_INSTALL_PREFIX='+str(dest)]
         for name in ['ONNXRUNTIME_INCLUDE_DIR','OPENCV_INCLUDE_DIR','pybind11_DIR']:
             if os.environ.get(name):args.append('-D'+name+'='+os.environ[name])
@@ -22,5 +22,5 @@ class CMakeBuild(build_ext):
         subprocess.run(['cmake','--install',str(build)],check=True)
 
 setup(packages=find_packages('python'),package_dir={'':'python'},
-      ext_modules=[Extension('spacemit_feathertalk._feathertalk',sources=[])],
-      cmdclass={'build_ext':CMakeBuild},package_data={'spacemit_feathertalk':['*.so*','bin/*']})
+      ext_modules=[Extension('spacemit_avatar._spacemit_avatar',sources=[])],
+      cmdclass={'build_ext':CMakeBuild},package_data={'spacemit_avatar':['*.so*','bin/*']})

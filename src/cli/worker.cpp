@@ -1,4 +1,4 @@
-#include "feathertalk_service.h"
+#include "avatar_service.h"
 #include "internal.h"
 #include <yaml-cpp/yaml.h>
 #include <opencv2/imgcodecs.hpp>
@@ -20,7 +20,7 @@
 #include <sched.h>
 #endif
 namespace fs=std::filesystem;
-using namespace feathertalk;
+using namespace SpacemiT::avatar;
 namespace {
 volatile std::sig_atomic_t stopped=0;
 void on_signal(int){stopped=1;}
@@ -77,7 +77,7 @@ void affinity(const YAML::Node& node){
 int main(int argc,char** argv){
  std::signal(SIGTERM,on_signal);std::signal(SIGINT,on_signal);
  try{
-    if(argc<2)throw std::invalid_argument("Usage: feathertalk_worker extract|render --config FILE --audio WAV --features FTF --output PATH [--max-frames N]");
+    if(argc<2)throw std::invalid_argument("Usage: avatar_worker extract|render --config FILE --audio WAV --features FTF --output PATH [--max-frames N]");
     const std::string mode=argv[1];std::map<std::string,std::string> args;
     for(int i=2;i<argc;i+=2){if(i+1>=argc)throw std::invalid_argument("Missing option value");const std::string key=argv[i];if(key!="--config"&&key!="--audio"&&key!="--features"&&key!="--output"&&key!="--max-frames")throw std::invalid_argument("Unknown option");args[key]=argv[i+1];}
     if(!args.count("--config")||!args.count("--output"))throw std::invalid_argument("config and output required");
@@ -138,5 +138,5 @@ int main(int argc,char** argv){
     }else throw std::invalid_argument("Unknown mode");
     const auto ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
     std::cout<<"{\"ok\":true,\"frames\":"<<count<<",\"elapsed_ms\":"<<ms<<"}\n";return 0;
- }catch(const std::exception& e){std::cerr<<"feathertalk: "<<e.what()<<'\n';return 2;}
+ }catch(const std::exception& e){std::cerr<<"avatar_worker: "<<e.what()<<'\n';return 2;}
 }

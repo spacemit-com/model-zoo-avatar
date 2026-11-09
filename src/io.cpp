@@ -10,7 +10,7 @@ void put(unsigned char* p,std::uint64_t x,int n){for(int i=0;i<n;++i)p[i]=static
 void exact(std::istream& s,char* p,std::size_t n){if(!s.read(p,static_cast<std::streamsize>(n)))throw std::runtime_error("Truncated input file");}
 void little_host(){std::uint16_t x=1;if(*reinterpret_cast<unsigned char*>(&x)!=1)throw std::runtime_error("Little-endian host required");}
 }
-namespace feathertalk {
+namespace SpacemiT::avatar {
 std::vector<std::int16_t> ReadWav16k(const std::string& path){
     std::ifstream s(path,std::ios::binary);if(!s)throw std::runtime_error("Cannot open WAV: "+path);
     std::array<unsigned char,12> head{};exact(s,reinterpret_cast<char*>(head.data()),12);
@@ -38,7 +38,7 @@ std::vector<std::int16_t> ReadWav16k(const std::string& path){
     return pcm;
 }
 }
-namespace feathertalk::detail {
+namespace SpacemiT::avatar::detail {
 FeatureWriter::FeatureWriter(const std::string& path){
     little_host();
     stream_.reset(std::fopen(path.c_str(), "wbx"));

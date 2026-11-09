@@ -19,7 +19,7 @@ class RenderResult:
     render_metrics: dict
 
 
-class FeatherTalkService:
+class AvatarService:
     """Run an offline render in two native workers with caller-supplied assets."""
 
     def __init__(self, config, worker=None):
@@ -35,10 +35,10 @@ class FeatherTalkService:
             timeout = float(section.get('timeout_s', 3600))
             if not math.isfinite(timeout) or not 0 < timeout <= 86400:
                 raise ValueError('Worker timeout must be finite, positive, and at most 86400 seconds')
-        bundled_worker = Path(__file__).resolve().parent / 'bin' / 'feathertalk_worker'
-        selected = worker or os.environ.get('FEATHERTALK_WORKER')
+        bundled_worker = Path(__file__).resolve().parent / 'bin' / 'avatar_worker'
+        selected = worker or os.environ.get('AVATAR_WORKER')
         if not selected:
-            selected = str(bundled_worker) if bundled_worker.is_file() else 'feathertalk_worker'
+            selected = str(bundled_worker) if bundled_worker.is_file() else 'avatar_worker'
         self.worker = shutil.which(os.path.expanduser(selected))
         if not self.worker:
             raise FileNotFoundError(f'Native worker not found or executable: {selected}')
@@ -51,7 +51,7 @@ class FeatherTalkService:
 
     def _run(self, stage, args):
         env = dict(os.environ)
-        directory = env.get(f'FEATHERTALK_{stage.upper()}_LIBRARY_DIR')
+        directory = env.get(f'AVATAR_{stage.upper()}_LIBRARY_DIR')
         if directory:
             inherited = env.get('LD_LIBRARY_PATH')
             env['LD_LIBRARY_PATH'] = directory + (os.pathsep + inherited if inherited else '')
@@ -111,7 +111,7 @@ class FeatherTalkService:
                 raise ValueError('max_frames must be nonnegative')
             if out.exists() and (not out.is_dir() or any(out.iterdir())):
                 raise FileExistsError('Output directory must be empty')
-            with tempfile.TemporaryDirectory(prefix='feathertalk-') as temp:
+            with tempfile.TemporaryDirectory(prefix='avatar-') as temp:
                 features = Path(temp) / 'audio.ftf'
                 first = self._run('hubert', ['extract', '--audio', str(audio), '--output', str(features)])
                 if first['frames'] < 1:

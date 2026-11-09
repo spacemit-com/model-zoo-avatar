@@ -5,7 +5,7 @@
 #include <vector>
 #include <opencv2/core.hpp>
 
-namespace feathertalk {
+namespace SpacemiT::avatar {
 constexpr std::size_t kWindowElements = 16 * 32 * 32;
 struct RuntimeOptions {
     std::string ort_library = "libonnxruntime.so";
@@ -66,4 +66,4 @@ private:
 std::vector<cv::Point2f> ReadLandmarks(const std::string& path);
 std::vector<std::int16_t> ReadWav16k(const std::string& path);
 std::string RuntimeVersion();
-} // namespace feathertalk
+} // namespace SpacemiT::avatar
