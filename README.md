@@ -18,7 +18,7 @@ UNet 的 INT8 是图内部量化，公开张量仍为 FP32。`feifan` 与 `zihan
 ```bash
 # 默认只下载 FeatherHuBERT + feifan UNet；不下载任何其他模型。
 bash scripts/download_models.sh --persona feifan
-# 同一人物前32组JPG/关键点 + 测试WAV（通用 speech.wav、feifan_test.wav、zihan_test.wav）+ 本地生成的1秒静音WAV。
+# 同一人物前32组JPG/关键点 + 两个人物的测试WAV（feifan_test.wav、zihan_test.wav）+ 本地生成的1秒静音WAV。
 bash scripts/download_assets.sh --persona feifan
 # 可选：只取特征模型；另一人物；全部配套帧。
 bash scripts/download_models.sh --model hubert
@@ -31,7 +31,7 @@ bash scripts/download_models.sh --offline
 
 资源写入 `~/.cache/models/avatar/` 与 `~/.cache/assets/avatar/`。通过 `--models-dir`、`--assets-dir` 和 `--cache-dir` 可指定位置；修改位置后同步修改 YAML。
 
-清单 `config/resources.json` 引用资源服务器 `model_zoo/avatar/` 下 bianbu-avatar 的 20261021-r1 发布资源。人物历史 tar 同时包含权重和素材，下载器只解出本次选中的成员；首次下载该人物任一成员仍需下载整个约64MB归档，后续模型/素材共享缓存。音频是驱动嘴型的测试录音，不是克隆音色参考录音。
+清单 `config/resources.json` 引用资源服务器 `model_zoo/avatar/` 下 bianbu-avatar 的 20261021-r1 发布资源。人物历史 tar 同时包含权重和素材，下载器只解出本次选中的成员；首次下载该人物任一成员仍需下载整个约64MB归档，后续模型/素材共享缓存。测试音频在本组件中只用于驱动嘴型。
 
 下载器验证归档和逐文件大小/SHA256，支持HTTP续传及服务端忽略Range时重新下载，拒绝路径逃逸和选中软链接；已有不同内容的文件保留，明确指定 `--force` 才替换。安装 `python3-zstandard` 或 `zstd` 可解压 tar.zst。
 

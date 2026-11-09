@@ -21052,12 +21052,6 @@
     ]
   },
   "audio": {
-    "speech.wav": {
-      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/assets/audio/001_zh_daily_weather.wav",
-      "size": 51906,
-      "sha256": "cb33545daebb3bb096ed1eb6458206a90bfc07bef5d97e7690f07c3d885f9a08",
-      "license_status": "Check source audio license before redistributing; downloader references original server."
-    },
     "feifan_test.wav": {
       "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/assets/audio/028_feifan_test.wav",
       "size": 288044,
