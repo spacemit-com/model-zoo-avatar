@@ -21058,6 +21058,16 @@
       "sha256": "cb33545daebb3bb096ed1eb6458206a90bfc07bef5d97e7690f07c3d885f9a08",
       "license_status": "Check source audio license before redistributing; downloader references original server."
     },
+    "feifan_test.wav": {
+      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/assets/audio/028_feifan_test.wav",
+      "size": 288044,
+      "sha256": "f1790d1272d63fceceeef2000686ff2b73b05e71fc4db6b3a535637ac36bdf5d"
+    },
+    "zihan_test.wav": {
+      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/assets/audio/029_zihan_test.wav",
+      "size": 179244,
+      "sha256": "5c6c489e0f85e262cad2a579cd2ae185190981bf0c66c1fb591d9b67c82a97fa"
+    },
     "silence.wav": {
       "generated": "silence_16k_1s",
       "size": 32044,
