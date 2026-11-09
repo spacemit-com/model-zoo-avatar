@@ -575,7 +575,9 @@ cv::Mat PreparedFrame::Compose(const std::vector<float>& output){
     const auto& o=impl_->options;auto& s=impl_->scratch;const auto& a=impl_->asset;
     const auto& face=detail::createOutputFace(output.data(),a,o.native_pasteback?0:o.mouth_sharpen,o.native_pasteback?false:o.temporal_smooth,o.smooth_alpha,o.patch_lowpass,s);
     const auto& alpha=o.native_pasteback?detail::nativeAlphaMask(a.bbox,s):impl_->alpha;
-    auto result=impl_->base.clone();detail::pasteResidualFace(face,a.face,a.bbox,alpha,1.0f,o.mouth_only_blend,result,s);return result;
+    // Native paste-back replaces the face directly, as bianbu-avatar does. The
+    // residual path would add the source lip edge back over the generated lip.
+    auto result=impl_->base.clone();detail::pasteResidualFace(face,a.face,a.bbox,alpha,1.0f,o.native_pasteback||o.mouth_only_blend,result,s);return result;
 }
 std::vector<cv::Point2f> ReadLandmarks(const std::string& path){return detail::readLandmarks(path);}
 }

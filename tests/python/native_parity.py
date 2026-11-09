@@ -63,7 +63,10 @@ def unet(a):
   dataset=Path(a.dataset);bgr=cv2.imread(str(dataset/'full_body_img/0.jpg'));points=np.loadtxt(dataset/'landmarks/0.lms',dtype=np.float32)
  else:
   y,x=np.indices((240,240))
-  bgr=np.stack((x,y,(x+y)//2),axis=-1).astype(np.uint8)
+  # Fine texture separates the direct and residual compositors; a smooth
+  # gradient would make them agree within rounding.
+  texture=np.random.default_rng(7).integers(0,64,(240,240,3))
+  bgr=np.clip(np.stack((x,y,(x+y)//2),axis=-1)*3//4+texture,0,255).astype(np.uint8)
   points=np.full((110,2),120,dtype=np.float32)
   points[[1,31,52]]=[[30,120],[210,120],[120,30]]
   points[90:]=np.column_stack((np.arange(100,140,2),150+np.arange(20)%3))
@@ -84,12 +87,13 @@ def unet(a):
   else:assert rmse<.01,(rmse,max_abs)
   result=frame.compose(output);assert result.shape==bgr.shape
   outside=np.ones(bgr.shape[:2],bool);outside[y:y+h,x:x+w]=False;np.testing.assert_array_equal(result[outside],bgr[outside])
-  # Independent NumPy/OpenCV reference for the default residual/native-alpha compositor.
+  # Independent NumPy/OpenCV reference for the default native-alpha compositor. Like
+  # bianbu-avatar, native paste-back replaces the face directly instead of adding a residual.
   generated=face.copy();generated[4:164,4:164]=np.clip(np.floor(np.clip(output[0].transpose(1,2,0),0,1)*255+.5),0,255).astype(np.uint8)
-  gen=cv2.resize(generated,(w,h),interpolation=cv2.INTER_CUBIC).astype(np.float32);base=cv2.resize(face,(w,h),interpolation=cv2.INTER_CUBIC).astype(np.float32)
+  gen=cv2.resize(generated,(w,h),interpolation=cv2.INTER_CUBIC).astype(np.float32);dst=bgr[y:y+h,x:x+w].astype(np.float32)
   margin=np.clip(int(np.floor(min(w,h)*.1+.5)),2,64)
   xx=np.minimum(np.arange(w,dtype=np.float32)+.5,w-.5-np.arange(w,dtype=np.float32));yy=np.minimum(np.arange(h,dtype=np.float32)+.5,h-.5-np.arange(h,dtype=np.float32));alpha=np.clip(yy/margin,0,1)[:,None]*np.clip(xx/margin,0,1)[None,:]
-  expected_image=bgr.copy();expected_image[y:y+h,x:x+w]=np.clip(np.rint(bgr[y:y+h,x:x+w].astype(np.float32)+alpha[:,:,None]*(gen-base)),0,255).astype(np.uint8)
+  expected_image=bgr.copy();expected_image[y:y+h,x:x+w]=np.clip(np.rint(dst+alpha[:,:,None]*(gen-dst)),0,255).astype(np.uint8)
   pixel=int(np.abs(result.astype(np.int16)-expected_image.astype(np.int16)).max());assert pixel<=1,pixel
   try:model.infer(expected[:,:,:,:159].copy(),audio);raise AssertionError('Bad shape accepted')
   except ValueError:pass

@@ -15,7 +15,7 @@
 
 参考服务保存在 `tests/reference/feature_reference.py`，来源哈希在 `config/source-baseline.json`。同一分块序列逐组比较，不声称不同外部分块方式的特征数值逐位相同。NumPy和C++归约次序可能导致浮点舍入差异，真实模型误差由回归报告量化。
 
-低层特征提取器保持原帧数与窗口语义；完成final后要求reset再输入，这是新增的明确生命周期约束。CLI只在最后补闭嘴零特征，使文件示例覆盖完整PCM时长，补帧不属于模型结果。PreparedFrame默认使用原CPU残差合成路径；没有把它等同于MPP硬件编码或整个数字人播放器。
+低层特征提取器保持原帧数与窗口语义；完成final后要求reset再输入，这是新增的明确生命周期约束。CLI只在最后补闭嘴零特征，使文件示例覆盖完整PCM时长，补帧不属于模型结果。PreparedFrame默认与bianbu-avatar一致：原生贴回直接替换人脸区域，仅在 `native_pasteback` 与 `mouth_only_blend` 都关闭时使用残差合成；没有把它等同于MPP硬件编码或整个数字人播放器。
 
 ## FTF1
 
