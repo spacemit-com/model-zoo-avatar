@@ -4,19 +4,19 @@
   "license_status": "Resource license not specified by source catalog; owner review required before public redistribution.",
   "archives": {
     "hubert": {
-      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/avator/models/hubert/20261021-r1/feather-hubert.tar.zst",
+      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/avatar/models/hubert/20261021-r1/feather-hubert.tar.zst",
       "kind": "tar.zst",
       "size": 12509703,
       "sha256": "c42665eeff26a12c0ec6271def2ce2e2dbe1f6e187d6def11a0810584370c749"
     },
     "person_zihan": {
-      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/avator/personas/hanjie/20261021-r1/persona.tar.zst",
+      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/avatar/personas/hanjie/20261021-r1/persona.tar.zst",
       "kind": "tar.zst",
       "size": 64194795,
       "sha256": "cfc123b092cf54a08c92909391bbdf092673b4eed77cb055a44882cf5944024a"
     },
     "person_feifan": {
-      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/avator/personas/xiaoxiong/20261021-r1/persona.tar.zst",
+      "url": "https://archive.spacemit.com/spacemit-ai/model_zoo/avatar/personas/xiaoxiong/20261021-r1/persona.tar.zst",
       "kind": "tar.zst",
       "size": 64316507,
       "sha256": "05809ffe81859ae7891b66d14e9cd29465ab741989b5219f1872d7651a3ebce8"
