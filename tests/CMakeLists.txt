@@ -1,0 +1,4 @@
+add_executable(feathertalk_core_test cpp/core_test.cpp)
+target_include_directories(feathertalk_core_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(feathertalk_core_test PRIVATE feathertalk)
+add_test(NAME core_contract COMMAND feathertalk_core_test)

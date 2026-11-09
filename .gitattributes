@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.onnx binary
+*.data binary
+*.wav binary
+*.png binary
+*.jpg binary
+*.whl binary
