@@ -65,7 +65,7 @@ WAV 必须为16kHz、单声道、PCM16；其它输入先用 FFmpeg 转换。输�
 
 zihan配套示例使用 `configs/zihan.cpu.yaml`。同一人物的UNet与assets需同时下载，不要只改模型路径而留下另一人物的素材。
 
-`configs/k3.yaml` 显式选择 SpaceMIT EP；请按实际安装设置其中的 `ort_library`、`ep_library` 和 affinity。需要分别使用不同 ORT 时，Python示例的两个worker进程已隔离；可用 `FEATHERTALK_HUBERT_LIBRARY_DIR` 与 `FEATHERTALK_UNET_LIBRARY_DIR` **仅设置子进程**库搜索路径。系统部署还应保证cpuset允许所选EP核。示例不修改主机核分配，也不自动占用其它推理服务的核心。
+`configs/k3.yaml` 与 `configs/zihan.k3.yaml` 显式选择 SpaceMIT EP，核分配与 bianbu-avatar 长对话配置一致：FeatherHuBERT 在 X100 0–7 用 CPU 4线程；UNet worker 进程及 ORT 的4个 CPU 回退线程在 X100 0–7，2个 EP 线程绑定 A100 12、13（bianbu-avatar 默认配置为 10、11）。只设置 `ep_affinity` 不能把 EP 限定在这两个核上：EP 会在每个可用的 A100 核上各起一个线程。需像 bianbu-avatar 的 systemd 服务一样，在只允许 X100 0–7 和所选 A100 核的 cgroup 中运行，例如 `sudo systemd-run --scope -p AllowedCPUs=0-7,12-13 bash examples/cpp/run_pipeline.sh configs/k3.yaml …`。K3 实测该方式需配合 bianbu-avatar 随包的 EP 2.0.7 运行库；系统 EP 2.0.8 在受限 cgroup 中仍会在其它 A100 核上起线程。请按实际安装设置其中的 `ort_library`、`ep_library` 和 affinity。需要分别使用不同 ORT 时，Python示例的两个worker进程已隔离；可用 `FEATHERTALK_HUBERT_LIBRARY_DIR` 与 `FEATHERTALK_UNET_LIBRARY_DIR` **仅设置子进程**库搜索路径。系统部署还应保证cpuset允许所选EP核。示例不修改主机核分配，也不自动占用其它推理服务的核心。
 
 ## 4. Python wheel 与示例
 
