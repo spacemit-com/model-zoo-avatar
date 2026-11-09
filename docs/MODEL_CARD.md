@@ -6,7 +6,7 @@
 - 人物UNet：input FP32 [1,6,160,160] + audio FP32 [1,16,32,32] → output FP32 [1,3,160,160]。
 - zihan与feifan是两份不同的人物UNet及配套帧/关键点；不能互换模型与素材。
 - 音频为16kHz单声道PCM16。静音门槛和归一化与固定版本参考服务一致。
-- 权重、素材来自现有资源清单中的20261021-r1归档；来源、大小和SHA256见config/resources.json。旧服务器的avator路径是历史事实，不是新增仓库名称。
+- 权重、素材来自资源服务器 model_zoo/avatar/ 下的20261021-r1归档；来源、大小和SHA256见config/resources.json。
 
 speech.wav是公开资源服务器的测试讲话录音，用于驱动嘴型；silence.wav在本地确定性生成。它们不是TTS或克隆音色参考录音。
 
