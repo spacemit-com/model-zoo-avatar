@@ -1,0 +1,12 @@
+include VERSION CMakeLists.txt LICENSE NOTICE README.md package.xml test.yaml
+recursive-include include *.h
+recursive-include src *.h *.cpp
+recursive-include examples *.cpp *.py *.sh
+include config/resources.json config/source-baseline.json
+recursive-include configs *.yaml
+recursive-include scripts *.py *.sh
+recursive-include tests CMakeLists.txt *.py *.cpp *.sh
+recursive-include docs *.md
+recursive-include python *.py *.cpp
+global-exclude *.onnx *.wav *.jpg *.png *.mossvoice *.pyc
+global-exclude *.local.yaml *.env *.key *.crt *.so *.so.* *.whl

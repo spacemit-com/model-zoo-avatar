@@ -1,0 +1,30 @@
+{
+  "upstream_repository": "bianbu-avatar",
+  "upstream_revision": "58beaf699dd27a6bcc04e11076877b2ee9b01636",
+  "source_file": "services/renderer/avator_k3_realtime.cpp",
+  "source_sha256": "5629f3f3b8c880e38cd1a303fb1110cce98700640bcda23cd82b0f0cadb995a8",
+  "extracted_blocks": {
+    "std::vector<cv::Point2f> readLandmarks(": "633f804fa2455887118a60b5d75a09e2eb94031f488cb70a678ce061dbfd6087",
+    "cv::Rect computeFaceRect(": "c03770f8d5684a6358275cb72ef41f4e1e2dffb6307aaf128a09dfeb6d05e187",
+    "float computeMouthOpenRatio(": "75875e5c4831fbed2880ff61597948df1d851456ec806bf99a6f6e41e3a9e89d",
+    "cv::Rect computeMouthRoi(": "238ef2da796723803df7a0be9122520cf46b33c61529ea0a5dde2be5a08c8392",
+    "cv::Mat createAlpha(": "1db64f6e854f88bfa64d9d75cf63a6cd22dc4fca765372002c0872269e03fab8",
+    "std::vector<float> createImageInput(": "45f7904d4e34a36abe7624672280b5c36b8172698748c3d2a730e6ae7b3336f3",
+    "struct FacePostprocessScratch {": "85ea5109601c499e16dd636575f0d412c7c75c0071bec790be247313b2e8ff68",
+    "bool generatedFaceLooksValid(": "ee0dea78d8a4073a35cfd7c86f7fba197e98d26710634d8cbb7e734b36bc2c1e",
+    "const cv::Mat& createOutputFace(": "1e4107c9c111fc0a3f7f69934255f0df0166077b03b7ca28d5fede4f396b87e3",
+    "const cv::Mat& nativeAlphaMask(": "7a82fedeb1f271eb780a720b0151db612cb8201487bb093a0adc28b8fac6acce",
+    "void pasteResidualFace(": "050c954f280e6c61b4b37f4379b1d913010c8ce1b7003a15615cda789e46e938"
+  },
+  "ai_sdk_reference": "5a851083e1d9b0f6ad05fefd65e92511cd9c2178",
+  "license_status": "Extracted code is released under Apache-2.0 in this component. Model weight redistribution terms are recorded separately. The submitter confirmed the current portrait assets need no separate permission for the planned Model Zoo submission on 2026-11-06.",
+  "derivation_notes": [
+    "Image functions preserve original math; one unused local annotated maybe_unused. Public wrapper adds validation, ownership, and per-instance non-reentrancy.",
+    "FeatureStream migrated from feature_reference.py with float32-normalized PCM and fixed 1.25s/1e-3 baseline; final padding belongs only to CLI timeline."
+  ],
+  "feature_source": {
+    "path": "services/feature/feather_feature_server_onnx.py",
+    "sha256": "5ccfe6d8dcb6a3bd74dc4637a1c67c90bba12ce61123adde38c5b55388de594f",
+    "reference_copy_sha256": "5ccfe6d8dcb6a3bd74dc4637a1c67c90bba12ce61123adde38c5b55388de594f"
+  }
+}

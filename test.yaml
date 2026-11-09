@@ -1,0 +1,31 @@
+module: components/model_zoo/avatar
+
+tests:
+  - name: avatar-core-contract
+    description: Verify feature cursors, failed-push recovery, image masking, and feature file contracts without model weights.
+    category: functional
+    scopes: [pr]
+    timeout_s: 180
+    workdir: module
+    command: bash tests/run_sdk_test.sh core
+  - name: avatar-download-contract
+    description: Verify resource checksums, safe extraction, and Python worker lifecycle.
+    category: functional
+    scopes: [pr]
+    timeout_s: 120
+    workdir: module
+    command: bash tests/run_sdk_test.sh python
+  - name: avatar-installed-sdk-smoke
+    description: Import the installed native bindings and start the installed worker outside the source directory.
+    category: functional
+    scopes: [pr]
+    timeout_s: 300
+    workdir: module
+    command: bash tests/run_sdk_test.sh installed
+  - name: avatar-native-parity
+    description: Compare real FeatherHuBERT and UNet results with the Python CPU reference. Accepts an optional second UNet checkpoint.
+    category: functional
+    scopes: [manual, release]
+    timeout_s: 600
+    workdir: module
+    command: bash tests/run_sdk_test.sh parity

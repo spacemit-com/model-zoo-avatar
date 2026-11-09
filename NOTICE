@@ -1,0 +1,40 @@
+SpacemiT Avatar Component
+Copyright 2026 SpacemiT (Hangzhou) Technology Co. Ltd.
+
+This product includes software developed at
+SpacemiT (Hangzhou) Technology Co. Ltd. (https://www.spacemit.com/).
+
+Image preprocessing and compositing functions originate from SpacemiT's
+bianbu-avatar project. The source revision, file SHA256 and extracted block
+hashes are recorded in config/source-baseline.json.
+
+Model weights, portrait frames and landmarks are not part of this source tree.
+They are downloaded separately from the resource server listed in
+config/resources.json and are not covered by the license of this code.
+
+---------------------------------------------------------------------------
+Third-party Software Notices:
+---------------------------------------------------------------------------
+
+This product depends on the following third-party software. None of it is
+distributed in this source tree or relicensed by this project. Obtain their
+complete license and notice files from the selected source or binary
+distributions before publishing a binary bundle.
+
+1. ONNX Runtime (https://github.com/microsoft/onnxruntime)
+   Licensed under the MIT License.
+
+2. OpenCV (https://opencv.org/)
+   Licensed under the Apache License 2.0 (4.5.0 and later).
+
+3. pybind11 (https://github.com/pybind/pybind11)
+   Licensed under the BSD 3-Clause License.
+
+4. yaml-cpp (https://github.com/jbeder/yaml-cpp)
+   Licensed under the MIT License.
+
+5. NumPy (https://numpy.org/)
+   Licensed under the BSD 3-Clause License.
+
+6. PyYAML (https://pyyaml.org/)
+   Licensed under the MIT License.

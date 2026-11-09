@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>avatar</name>
+  <version>0.1.0</version>
+  <description>FeatherHuBERT and person-specific UNet audio-driven face generation</description>
+  <license>Apache-2.0</license>
+  <system_depend>libopencv-core-dev</system_depend>
+  <system_depend>libopencv-imgproc-dev</system_depend>
+  <system_depend>libopencv-imgcodecs-dev</system_depend>
+  <system_depend>libyaml-cpp-dev</system_depend>
+  <system_depend>python3-dev</system_depend>
+  <system_depend>pybind11-dev</system_depend>
+  <system_depend>python3-numpy</system_depend>
+  <system_depend>python3-yaml</system_depend>
+  <system_depend arch="riscv64">spacemit-onnxruntime</system_depend>
+  <export><build_type>cmake</build_type></export>
+</package>
