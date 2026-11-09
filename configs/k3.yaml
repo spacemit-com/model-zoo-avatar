@@ -3,13 +3,13 @@ schema: 1
 # showed four CPU Resize events on the tested board. Select a validated closure
 # explicitly when requiring all-EP UNet, then run scripts/verify_ep_profile.py.
 hubert:
-  model: ~/.cache/models/feathertalk/20261021-r1/feather_hubert_dynamic.onnx
+  model: ~/.cache/models/feathertalk/feather_hubert_dynamic.onnx
   provider: cpu
   ort_library: libonnxruntime.so
   threads: 4
   cpu_affinity: [0, 1, 2, 3, 4, 5, 6, 7]
 unet:
-  model: ~/.cache/models/feathertalk/20261021-r1/feifan_int8.onnx
+  model: ~/.cache/models/feathertalk/feifan_int8.onnx
   provider: spacemit
   ort_library: libonnxruntime.so
   ep_library: libspacemit_ep.so
@@ -17,7 +17,7 @@ unet:
   ep_threads: 2
   ep_affinity: "12;13"
 assets:
-  person: ~/.cache/assets/feathertalk/20261021-r1/feifan
+  person: ~/.cache/assets/feathertalk/feifan
 render:
   feather: true
   native_pasteback: true

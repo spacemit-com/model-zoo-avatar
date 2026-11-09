@@ -114,7 +114,7 @@ def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('kind',choices=['models','assets']);p.add_argument('--persona',choices=['feifan','zihan','all'],default='feifan');p.add_argument('--model',choices=['hubert','unet','all'],default='all');p.add_argument('--frames',type=int,default=32,help='Asset frame limit; 0 downloads all paired frames');p.add_argument('--manifest',type=Path,default=ROOT/'config/resources.json');p.add_argument('--cache-dir',type=Path,default=Path.home()/'.cache/feathertalk/downloads');p.add_argument('--models-dir',type=Path);p.add_argument('--assets-dir',type=Path);p.add_argument('--offline',action='store_true');p.add_argument('--force',action='store_true');p.add_argument('--dry-run',action='store_true');a=p.parse_args(argv)
     data=json.loads(a.manifest.read_text(encoding='utf-8'))
     if data.get('schema')!=1 or a.frames<0:raise ValueError('Invalid manifest schema or frame limit')
-    root=(a.models_dir or Path.home()/'.cache/models/feathertalk'/data['resource_version']) if a.kind=='models' else (a.assets_dir or Path.home()/'.cache/assets/feathertalk'/data['resource_version'])
+    root=(a.models_dir or Path.home()/'.cache/models/feathertalk') if a.kind=='models' else (a.assets_dir or Path.home()/'.cache/assets/feathertalk')
     root=root.expanduser().resolve();entries=[]
     if a.kind=='models':
         if a.model in ('hubert','all'):entries.append(data['models']['hubert'])

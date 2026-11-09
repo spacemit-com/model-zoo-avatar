@@ -29,7 +29,7 @@ bash scripts/download_models.sh --dry-run
 bash scripts/download_models.sh --offline
 ```
 
-资源写入 `~/.cache/models/feathertalk/20261021-r1/` 与 `~/.cache/assets/feathertalk/20261021-r1/`。通过 `--models-dir`、`--assets-dir` 和 `--cache-dir` 可指定位置；修改位置后同步修改 YAML。
+资源写入 `~/.cache/models/feathertalk/` 与 `~/.cache/assets/feathertalk/`。通过 `--models-dir`、`--assets-dir` 和 `--cache-dir` 可指定位置；修改位置后同步修改 YAML。
 
 清单 `config/resources.json` 引用**已存在的历史资源服务器地址**（其中路径仍叫 `avator`），没有伪造尚未上传的 `feathertalk/` 资源地址。人物历史 tar 同时包含权重和素材，下载器只解出本次选中的成员；首次下载该人物任一成员仍需下载整个约64MB归档，后续模型/素材共享缓存。音频是驱动嘴型的测试录音，不是克隆音色参考录音。
 
@@ -54,10 +54,10 @@ ctest --test-dir build --output-on-failure
 ```bash
 export FEATHERTALK_WORKER="$PWD/build/feathertalk_worker"
 bash examples/cpp/run_pipeline.sh configs/cpu.yaml \
-  ~/.cache/assets/feathertalk/20261021-r1/audio/speech.wav output/demo-frames
+  ~/.cache/assets/feathertalk/audio/speech.wav output/demo-frames
 # 合成带原音轨的视频（FFmpeg仅是示例输出工具）
 ffmpeg -framerate 25 -i output/demo-frames/%08d.png \
-  -i ~/.cache/assets/feathertalk/20261021-r1/audio/speech.wav \
+  -i ~/.cache/assets/feathertalk/audio/speech.wav \
   -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest output/demo.mp4
 ```
 
@@ -75,7 +75,7 @@ source .venv/bin/activate
 python -m build --wheel --no-isolation
 python -m pip install --no-deps dist/spacemit_feathertalk-*.whl
 python examples/python/render_file.py --config configs/cpu.yaml \
-  --audio ~/.cache/assets/feathertalk/20261021-r1/audio/speech.wav \
+  --audio ~/.cache/assets/feathertalk/audio/speech.wav \
   --output output/python-frames --max-frames 25
 ```
 
