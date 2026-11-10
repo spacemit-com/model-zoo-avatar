@@ -8,7 +8,8 @@ jobs=${CMAKE_BUILD_PARALLEL_LEVEL:-2}
 python=${PYTHON:-python3}
 
 # A host job can supply release headers separately from the system include path.
-cmake_args=()
+# Test builds never package a wheel, so they leave the SDK's output/dist alone.
+cmake_args=(-DAVATAR_BUILD_WHEEL=OFF)
 if [[ -n ${ONNXRUNTIME_INCLUDE_DIR:-} ]]; then
     cmake_args+=("-DONNXRUNTIME_INCLUDE_DIR=$ONNXRUNTIME_INCLUDE_DIR")
 fi
