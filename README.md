@@ -84,7 +84,9 @@ python scripts\download_resources.py assets --persona feifan --frames 0
 本节提供示例程序的编译与运行方式，便于开发者快速验证效果。使用前需先按下列两种方式之一完成编译，再运行对应示例。
 
 - **在 SDK 中验证**（2.3.1）：在已拉取的 SpacemiT AI SDK 工程内用 `mm` 编译，产物部署到 `output/staging`，适合整机集成或与 ASR、TTS 等模块联调。
-- **独立构建下验证**（2.3.2）：在 Avatar 组件目录下用 CMake 本地编译，不依赖完整 SDK，适合快速体验或在不使用 SDK 的环境下使用。
+- **独立构建下验证**（2.3.2）：在 Avatar 组件目录下用 CMake 本地编译，不依赖完整 SDK，适合快速体验或只克隆本仓库时使用。
+
+示例默认读取 [2.2](#22-下载模型) 的下载位置，渲染 PNG 帧后用 ffmpeg 合成带音频的 mp4；未安装 ffmpeg 时只输出帧。换人物时把 `feifan` 换成 `zihan`。
 
 #### 2.3.1. 在 SDK 中验证
 
@@ -96,77 +98,41 @@ cd avatar
 mm
 ```
 
-构建完成后，除安装到 `output/staging` 外，wheel 包也会输出到 SDK 根目录下的 `output/dist/`，复用本次编译的扩展与 `avatar_worker`，不重复编译。例如：
+构建产物会安装到 `output/staging`，wheel 包输出到 SDK 根目录下的 `output/dist/`。
 
+**运行**：在 `avatar/` 目录下执行。
+
+**C++ 文件渲染：**
 ```bash
-output/dist/spacemit_avatar-0.1.0-cp314-cp314-linux_riscv64.whl
+avatar_file_demo --persona feifan     # 输出 output/feifan-frames/ 与 output/feifan.mp4
 ```
 
-**运行**：运行前在 SDK 根目录执行 `source build/envsetup.sh`，使 PATH 与库路径指向 `output/staging`，然后可执行：
-
-**C++ 简单示例**（逐帧调用 API，默认读取 2.2 的下载位置）：
-```bash
-avatar_file_demo --persona feifan --output feifan-frames
-avatar_file_demo --persona zihan --output zihan-frames
-```
-
-**C++ 文件渲染**（`avatar_worker` 两阶段，流水线渲染），在组件目录下执行：
-```bash
-avatar_worker extract --config configs/feifan.yaml \
-  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output feifan.ftf
-avatar_worker render --config configs/feifan.yaml --features feifan.ftf --output feifan-frames
-ffmpeg -framerate 25 -i feifan-frames/%08d.png -i ~/.cache/assets/avatar/audio/feifan_test.wav \
-  -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest feifan.mp4
-```
-
-**Python 文件渲染**（推荐先在虚拟环境中安装 wheel 包，wheel 内含 `avatar_worker`）：
+**Python 文件渲染**（需先安装 wheel；Bianbu 系统 Python 需在虚拟环境中安装）：
 ```bash
 python3 -m venv --system-site-packages .venv && source .venv/bin/activate
-pip install --no-deps ../output/dist/spacemit_avatar-0.1.0-*.whl
-python python/examples/render_file.py --config configs/feifan.yaml \
-  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output python-frames
+pip install --no-deps ../output/dist/spacemit_avatar-*.whl
+python python/examples/avatar_file_demo.py --persona feifan   # 输出 output/feifan-python.mp4
 ```
 
 #### 2.3.2. 独立构建下验证
 
-在 Avatar 组件目录下完成编译后，运行下列示例。
-
-**C++ 示例：**
+**C++ 文件渲染：**
 ```bash
 cd /path/to/avatar
-cmake -S . -B build -G Ninja
-cmake --build build -j4
-./build/avatar_file_demo --persona feifan --output feifan-frames
-./build/avatar_worker extract --config configs/feifan.yaml \
-  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output feifan.ftf
-./build/avatar_worker render --config configs/feifan.yaml --features feifan.ftf --output worker-frames
+cmake -S . -B build && cmake --build build -j4
+./build/avatar_file_demo --persona feifan
 ```
 
-**Python 示例：**
+**Python 文件渲染：**
 ```bash
-cd /path/to/avatar
-python3 -m venv --system-site-packages .venv && source .venv/bin/activate
 python -m build --wheel --no-isolation python
 pip install --no-deps python/dist/spacemit_avatar-*.whl
-python python/examples/render_file.py --config configs/feifan.yaml \
-  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output python-frames
+python python/examples/avatar_file_demo.py --persona feifan
 ```
 
-输出目录须不存在或为空；视频帧数为 `ceil(PCM 样本数 / 640)`，底帧按 0→749→0 往返使用。`avatar_file_demo` 默认 UNet 使用 `spacemit`，可用 `--audio`、`--max-frames` 指定音频与帧数。
+两个示例的常用参数相同：`--audio` 指定其他 16 kHz WAV，`--output` 指定帧目录（须为空），`--video` 指定 mp4 路径，`--no-video` 只输出帧，`--max-frames` 限制帧数。
 
-**组件测试**：入口与 `test.yaml` 一致，均不需要模型：
-
-```bash
-./tests/run_sdk_test.sh core            # C++ 契约（ctest）
-./tests/run_sdk_test.sh config          # 默认参数、链接的 ORT 与自带配置
-./tests/run_sdk_test.sh invalid-input   # 非法输入与 avatar_worker 命令行
-./tests/run_sdk_test.sh python          # 下载器与 worker 生命周期
-./tests/run_sdk_test.sh installed       # 安装到临时目录后加载
-```
-
-真实模型差分测试 `parity` 见 [docs/VALIDATION.md](docs/VALIDATION.md)。
-
-**说明**：`avatar_worker render` 将每帧拆为预取（解码底帧、计算模型输入）、UNet 推理、按帧序贴回、多线程写 PNG 四段并行执行，输出与逐帧串行处理逐字节一致。FeatherHuBERT 及 worker 的 CPU 线程运行在 X100 0–7；系统 EP 2.0.8 自行放置 A100 线程，在每个 A100 核各起一个、计算只在 A100 8、9 上进行。
+**契约测试**（不需要模型）：`./tests/run_sdk_test.sh core|config|invalid-input|python|installed`；真实模型差分测试见 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
 ## 3. 应用开发
 
@@ -183,7 +149,7 @@ python python/examples/render_file.py --config configs/feifan.yaml \
 | `avatar_worker` | 离线文件渲染命令行（SDK：`output/staging/bin/`；独立构建：`build/`） |
 | `spacemit_avatar-0.1.0-*.whl` | Python wheel 包（SDK：`output/dist/`；独立构建：`python -m build --wheel --no-isolation python` 输出到 `python/dist/`），`pip install` 后 `import spacemit_avatar` |
 
-示例程序（非集成必需）：`examples/avatar_file_demo.cpp`（编译为 `avatar_file_demo`）、`python/examples/render_file.py`。运行与验证步骤见 [2.3.1](#231-在-sdk-中验证) 或 [2.3.2](#232-独立构建下验证)。
+示例程序（非集成必需）：`examples/avatar_file_demo.cpp`（编译为 `avatar_file_demo`）、`python/examples/avatar_file_demo.py`。运行与验证步骤见 [2.3.1](#231-在-sdk-中验证) 或 [2.3.2](#232-独立构建下验证)。
 
 ### 3.2. API 使用
 
@@ -208,7 +174,7 @@ std::vector<float> window(batch.values.begin(), batch.values.begin() + kWindowEl
 cv::Mat image = frame.Compose(unet.Infer(frame.ImageTensor(), window));
 ```
 
-**Python**：安装后 `import spacemit_avatar`，详见 `python/examples/` 与 [API.md](API.md)。
+**Python**：安装后 `import spacemit_avatar`，完整示例见 `python/examples/avatar_file_demo.py`，接口见 [API.md](API.md)。
 
 ```python
 import spacemit_avatar
@@ -229,6 +195,14 @@ target_link_libraries(your_target PRIVATE avatar)
 使用约束：模型实例不可并发调用，`final` 之后须 `Reset()` 才能继续输入；`AvatarService` 的两个 worker 进程相互隔离，取消或失败时已写出的部分 PNG 不能当作完整结果。
 
 ### 3.3. 配置参数
+
+**命令行渲染**：`avatar_worker` 分两阶段离线渲染，`render` 阶段流水线并行，Python 的 `AvatarService` 内部也调用它。在组件目录下执行：
+
+```bash
+mkdir -p output
+avatar_worker extract --config configs/feifan.yaml   --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/feifan.ftf
+avatar_worker render --config configs/feifan.yaml --features output/feifan.ftf --output output/feifan-worker-frames
+```
 
 `avatar_worker` 与 `AvatarService` 读取 YAML 配置（`schema: 1`），自带 `configs/feifan.yaml`、`configs/zihan.yaml`。路径支持 `~/` 与相对配置文件的相对路径。
 
@@ -257,7 +231,8 @@ target_link_libraries(your_target PRIVATE avatar)
 | --- | --- | --- |
 | 下载报 404 或校验失败 | 资源地址变更或本地仓库较旧 | 更新仓库后重新下载；`--force` 替换内容不同的旧文件。 |
 | 提示 WAV 格式不支持 | 采样率或声道不符 | 用 `ffmpeg -i in.wav -ar 16000 -ac 1 -c:a pcm_s16le out.wav` 转换。 |
-| 提示输出目录非空 | 防止混入旧帧 | 使用新的或空的输出目录。 |
+| 提示输出目录非空或 `Video already exists` | 不覆盖上次的结果 | 删除旧的 `output/<人物>-frames/` 与 mp4，或用 `--output`、`--video` 指定新位置。 |
+| 只有帧，提示 `ffmpeg not found` | 未安装 ffmpeg | `sudo apt install ffmpeg` 后重新运行示例。 |
 | `This build has no SpaceMIT EP` | 构建时未找到 SpaceMIT EP | 安装 `spacemit-onnxruntime` 后重新构建。 |
 | 8–15 号核上都有 EP 线程 | 系统 EP 2.0.8 在每个 A100 核各起一个线程 | 正常现象：只有 A100 8、9 上的 2 个线程在计算，其余空闲。 |
 | `pip install` 提示 externally-managed-environment | 系统 Python 受保护 | 在 `python3 -m venv --system-site-packages` 创建的虚拟环境中安装。 |
@@ -297,4 +272,6 @@ target_link_libraries(your_target PRIVATE avatar)
 |----------|--------|------------|-----------------|----------|--------|
 | 9.5 ms | 0.6 ms | 3.2 ms | 33.9 ms | 3.7 ms | 27.0 ms |
 
-测试命令：`avatar_worker render --config configs/<人物>.yaml --features <人物>.ftf --output <空目录>`
+**复现方法**：在组件目录下按 [3.3](#33-配置参数) 用 `avatar_worker` 两阶段渲染，`render` 输出的 `elapsed_ms` 即渲染时间。`avatar_file_demo` 为便于阅读逐帧串行执行，不用于测速。
+
+**说明**：`avatar_worker render` 将每帧拆为预取（解码底帧、计算模型输入）、UNet 推理、按帧序贴回、多线程写 PNG 四段并行执行，输出与逐帧串行处理逐字节一致。FeatherHuBERT 及 worker 的 CPU 线程运行在 X100 0–7；系统 EP 2.0.8 自行放置 A100 线程，在每个 A100 核各起一个、计算只在 A100 8、9 上进行。
