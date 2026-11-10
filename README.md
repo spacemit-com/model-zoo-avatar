@@ -206,7 +206,7 @@ avatar_worker render --config configs/feifan.yaml --features output/feifan.ftf \
   --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/feifan-worker.mp4
 ```
 
-- `--output` 以 `.mp4` 结尾时，帧不写盘，直接送入 ffmpeg 编码（libx264 veryfast）；`--audio` 加入音轨，须与 `extract` 使用的音频相同，省略时生成无声视频。
+- `--output` 以 `.mp4` 结尾时，帧不写盘，直接送入 ffmpeg 编码为 H.264：K3 上用视频硬件编码器（`h264_stcodec`），开始前先试编码一帧，不可用时自动改用软件编码 libx264 veryfast，报告的 `encoder` 行会注明。`--audio` 加入音轨，须与 `extract` 使用的音频相同，省略时生成无声视频。
 - `--output` 为目录时输出 `00000000.png` 起的 PNG 帧序列。
 - 输出的上级目录会自动创建；已存在的 mp4 或特征文件不会被覆盖；失败或按 Ctrl+C 取消时不留下不完整的文件。
 
@@ -214,11 +214,11 @@ avatar_worker render --config configs/feifan.yaml --features output/feifan.ftf \
 
 ```text
 avatar_worker render: 225 frames, 9.00 s of video -> output/feifan-worker.mp4
-  total      8.76 s  (model load 0.32 s, render 8.14 s, ffmpeg finish 0.28 s)
-  speed      26.7 fps, steady 28.3 fps, RTF 0.935 (model load excluded)
-  per frame  decode 9.8 | landmarks 0.2 | preprocess 3.1 | UNet 35.9 | compose 6.2 | to ffmpeg 5.2 ms
-  encoder    ffmpeg libx264 veryfast, 112.0 ms CPU per frame
-  bottleneck UNet, at most 27.8 fps
+  total      8.23 s  (model load 0.31 s, render 7.73 s, ffmpeg finish 0.02 s)
+  speed      29.0 fps, steady 29.9 fps, RTF 0.861 (model load excluded)
+  per frame  decode 9.1 | landmarks 0.2 | preprocess 2.7 | UNet 34.2 | compose 5.7 | to ffmpeg 3.2 ms
+  encoder    h264_stcodec (K3 hardware), ffmpeg 5.9 ms CPU per frame
+  bottleneck UNet, at most 29.3 fps
 ```
 
 | 字段 | 含义 |
@@ -226,7 +226,7 @@ avatar_worker render: 225 frames, 9.00 s of video -> output/feifan-worker.mp4
 | `total` | 命令总耗时，括号内为模型加载、流水线渲染、ffmpeg 收尾（编码剩余帧并写入文件） |
 | `speed` | 渲染速度（不含模型加载）；`steady` 为第一帧之后的稳态帧率；`RTF` 为处理时间 ÷ 视频时长，小于 1 即快于实时 |
 | `per frame` | 各环节每帧平均耗时：解码底帧、读关键点、人脸预处理、UNet 推理、贴回合成、送入 ffmpeg（输出目录时为写 PNG） |
-| `encoder` | ffmpeg 编码每帧消耗的 CPU 时间（多线程累计） |
+| `encoder` | 所用编码器，以及 ffmpeg 每帧消耗的 CPU 时间（多线程累计） |
 | `bottleneck` | 各环节按自身线程数能达到的最高帧率中最低的一项，即当前的速度上限 |
 
 报告输出到 stderr；stdout 的最后一行是同样指标的 JSON（字段见 [API.md](API.md)），`AvatarService` 的 `render_metrics` 即来自这一行。
@@ -292,15 +292,15 @@ avatar_worker render: 225 frames, 9.00 s of video -> output/feifan-worker.mp4
 
 | 人物 | 测试音频 | 帧数 | 特征提取（含模型加载） | 渲染为 mp4（含模型加载与编码） | 渲染速度 | 稳态 |
 |------|----------|------|------------------------|--------------------------------|----------|------|
-| zihan | `zihan_test.wav`（5.6 s） | 140 | 0.77 s（RTF 0.11） | 5.66 s | 26.3 fps | 29.0 fps |
-| feifan | `feifan_test.wav`（9.0 s） | 225 | 1.06 s（RTF 0.10） | 8.76 s | 26.7 fps | 28.3 fps |
+| zihan | `zihan_test.wav`（5.6 s） | 140 | 0.77 s（RTF 0.11） | 5.35 s | 28.8 fps | 30.1 fps |
+| feifan | `feifan_test.wav`（9.0 s） | 225 | 1.06 s（RTF 0.10） | 8.23 s | 29.0 fps | 29.9 fps |
 
 feifan 单帧各环节耗时（流水线中各线程实测）：
 
-| 解码底帧 | 关键点 | 人脸预处理 | UNet 推理（EP） | 贴回合成 | 送入 ffmpeg | ffmpeg 编码 |
-|----------|--------|------------|-----------------|----------|-------------|-------------|
-| 9.8 ms | 0.2 ms | 3.1 ms | 35.9 ms | 6.2 ms | 5.2 ms | 112 ms CPU（多线程） |
+| 解码底帧 | 关键点 | 人脸预处理 | UNet 推理（EP） | 贴回合成 | 转 I420 并送入 ffmpeg | ffmpeg 编码（硬件） |
+|----------|--------|------------|-----------------|----------|------------------------|---------------------|
+| 9.1 ms | 0.2 ms | 2.7 ms | 34.2 ms | 5.7 ms | 3.2 ms | 5.9 ms CPU |
 
-UNet 推理是瓶颈，其余环节在 X100 上与它并行。输出 PNG 帧（`--output` 为目录）时不编码视频，UNet 为 33.9 ms，渲染约 29 fps；生成 mp4 时 libx264 与 UNet 的 CPU 部分共用 X100，UNet 约慢 2 ms。降低 ffmpeg 优先级或限制其线程数实测没有改善。`avatar_file_demo` 为便于阅读逐帧串行执行，不用于测速。
+UNet 推理是瓶颈，其余环节在 X100 上与它并行。H.264 由 K3 视频硬件编码器完成，ffmpeg 每帧只占约 6 ms CPU，生成 mp4 与输出 PNG 帧（约 29 fps）速度相同。没有硬件编码器时改用 libx264 veryfast，ffmpeg 每帧约 109 ms CPU，与 UNet 的 CPU 部分争用 X100，渲染约 26 fps。`avatar_file_demo` 为便于阅读逐帧串行执行，不用于测速。
 
 **说明**：`avatar_worker render` 将每帧拆为预取（解码底帧、计算模型输入）、UNet 推理、按帧序贴回、写出（多线程写 PNG，或按帧序送入 ffmpeg）四段并行执行，输出与逐帧串行处理逐字节一致。FeatherHuBERT 及 worker 的 CPU 线程运行在 X100 0–7；系统 EP 2.0.8 自行放置 A100 线程，在每个 A100 核各起一个、计算只在 A100 8、9 上进行。
