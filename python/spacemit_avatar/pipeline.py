@@ -1,3 +1,7 @@
+# Copyright (C) 2026 SpacemiT (Hangzhou) Technology Co. Ltd.
+# SPDX-License-Identifier: Apache-2.0
+"""Offline file rendering through the avatar_worker extract and render stages."""
+
 from dataclasses import dataclass
 import json
 import math
@@ -24,24 +28,24 @@ class AvatarService:
 
     def __init__(self, config, worker=None):
         self.config = Path(config).expanduser().resolve()
-        with self.config.open(encoding='utf-8') as stream:
+        with self.config.open(encoding="utf-8") as stream:
             self.options = yaml.safe_load(stream)
-        if not isinstance(self.options, dict) or self.options.get('schema') != 1:
-            raise ValueError('Expected config schema=1')
-        for stage in ('hubert', 'unet'):
+        if not isinstance(self.options, dict) or self.options.get("schema") != 1:
+            raise ValueError("Expected config schema=1")
+        for stage in ("hubert", "unet"):
             section = self.options.get(stage)
-            if not isinstance(section, dict) or not isinstance(section.get('model'), str):
-                raise ValueError(f'Missing {stage} model configuration')
-            timeout = float(section.get('timeout_s', 3600))
+            if not isinstance(section, dict) or not isinstance(section.get("model"), str):
+                raise ValueError(f"Missing {stage} model configuration")
+            timeout = float(section.get("timeout_s", 3600))
             if not math.isfinite(timeout) or not 0 < timeout <= 86400:
-                raise ValueError('Worker timeout must be finite, positive, and at most 86400 seconds')
-        bundled_worker = Path(__file__).resolve().parent / 'bin' / 'avatar_worker'
-        selected = worker or os.environ.get('AVATAR_WORKER')
+                raise ValueError("Worker timeout must be finite, positive, and at most 86400 seconds")
+        bundled_worker = Path(__file__).resolve().parent / "bin" / "avatar_worker"
+        selected = worker or os.environ.get("AVATAR_WORKER")
         if not selected:
-            selected = str(bundled_worker) if bundled_worker.is_file() else 'avatar_worker'
+            selected = str(bundled_worker) if bundled_worker.is_file() else "avatar_worker"
         self.worker = shutil.which(os.path.expanduser(selected))
         if not self.worker:
-            raise FileNotFoundError(f'Native worker not found or executable: {selected}')
+            raise FileNotFoundError(f"Native worker not found or executable: {selected}")
         self.worker = str(Path(self.worker).resolve())
         self._state_lock = threading.Lock()
         self._child = None
@@ -50,22 +54,20 @@ class AvatarService:
         self._closed = False
 
     def _run(self, stage, args):
-        env = dict(os.environ)
-        directory = env.get(f'AVATAR_{stage.upper()}_LIBRARY_DIR')
-        if directory:
-            inherited = env.get('LD_LIBRARY_PATH')
-            env['LD_LIBRARY_PATH'] = directory + (os.pathsep + inherited if inherited else '')
         with self._state_lock:
             if self._cancelled or self._closed:
-                raise RuntimeError('Rendering cancelled or service closed')
+                raise RuntimeError("Rendering cancelled or service closed")
             child = subprocess.Popen(
-                [self.worker, *args, '--config', str(self.config)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                encoding='utf-8', errors='replace', env=env,
+                [self.worker, *args, "--config", str(self.config)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self._child = child
         try:
-            out, err = child.communicate(timeout=float(self.options[stage].get('timeout_s', 3600)))
+            out, err = child.communicate(timeout=float(self.options[stage].get("timeout_s", 3600)))
         except subprocess.TimeoutExpired as exc:
             child.terminate()
             try:
@@ -73,7 +75,7 @@ class AvatarService:
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.communicate()
-            raise TimeoutError(f'{stage} worker timed out') from exc
+            raise TimeoutError(f"{stage} worker timed out") from exc
         finally:
             # A caller interrupt must also reap the worker before releasing the slot.
             if child.poll() is None:
@@ -83,23 +85,23 @@ class AvatarService:
                 self._child = None
         with self._state_lock:
             if self._cancelled:
-                raise RuntimeError('Rendering cancelled')
+                raise RuntimeError("Rendering cancelled")
         if child.returncode:
-            raise RuntimeError(f'{stage} worker exit {child.returncode}: {err[-4000:]}')
-        lines = [line for line in out.splitlines() if line.startswith('{')]
+            raise RuntimeError(f"{stage} worker exit {child.returncode}: {err[-4000:]}")
+        lines = [line for line in out.splitlines() if line.startswith("{")]
         if not lines:
-            raise RuntimeError('Native worker returned no result')
+            raise RuntimeError("Native worker returned no result")
         result = json.loads(lines[-1])
-        if not result.get('ok'):
-            raise RuntimeError('Native worker rejected request')
+        if not result.get("ok"):
+            raise RuntimeError("Native worker rejected request")
         return result
 
     def render_file(self, audio_path, output_dir, max_frames=0):
         with self._state_lock:
             if self._closed:
-                raise RuntimeError('Service closed')
+                raise RuntimeError("Service closed")
             if self._active:
-                raise RuntimeError('Service already rendering')
+                raise RuntimeError("Service already rendering")
             self._active = True
             self._cancelled = False
         try:
@@ -108,20 +110,22 @@ class AvatarService:
             if not audio.is_file():
                 raise FileNotFoundError(audio)
             if not isinstance(max_frames, int) or max_frames < 0:
-                raise ValueError('max_frames must be nonnegative')
+                raise ValueError("max_frames must be nonnegative")
             if out.exists() and (not out.is_dir() or any(out.iterdir())):
-                raise FileExistsError('Output directory must be empty')
-            with tempfile.TemporaryDirectory(prefix='avatar-') as temp:
-                features = Path(temp) / 'audio.ftf'
-                first = self._run('hubert', ['extract', '--audio', str(audio), '--output', str(features)])
-                if first['frames'] < 1:
-                    raise ValueError('Audio is too short to produce feature windows')
-                second = self._run('unet', ['render', '--features', str(features), '--output',
-                                           str(out), '--max-frames', str(max_frames)])
-                expected = min(first['frames'], max_frames) if max_frames else first['frames']
-                if second['frames'] != expected:
-                    raise RuntimeError('Native frame count mismatch')
-                return RenderResult(out, second['frames'], first, second)
+                raise FileExistsError("Output directory must be empty")
+            with tempfile.TemporaryDirectory(prefix="avatar-") as temp:
+                features = Path(temp) / "audio.ftf"
+                first = self._run("hubert", ["extract", "--audio", str(audio), "--output", str(features)])
+                if first["frames"] < 1:
+                    raise ValueError("Audio is too short to produce feature windows")
+                second = self._run(
+                    "unet",
+                    ["render", "--features", str(features), "--output", str(out), "--max-frames", str(max_frames)],
+                )
+                expected = min(first["frames"], max_frames) if max_frames else first["frames"]
+                if second["frames"] != expected:
+                    raise RuntimeError("Native frame count mismatch")
+                return RenderResult(out, second["frames"], first, second)
         finally:
             with self._state_lock:
                 self._active = False

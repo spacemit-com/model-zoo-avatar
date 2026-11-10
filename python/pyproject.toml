@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "pybind11>=2.6"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spacemit-avatar"
+dynamic = ["version", "readme"]
+description = "SpacemiT avatar lip-sync inference (FeatherHuBERT + person UNet) with C++ and Python interfaces"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "SpacemiT"}]
+dependencies = ["numpy>=1.26", "PyYAML>=6"]
+
+[project.optional-dependencies]
+download = ["zstandard>=0.22"]

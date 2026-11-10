@@ -1,29 +1,48 @@
 module: components/model_zoo/avatar
 
 tests:
-  - name: avatar-core-contract
-    description: Verify feature cursors, failed-push recovery, image masking, and feature file contracts without model weights.
+  - name: avatar-pr-contract
+    description: Verifies the feature timeline, failed-push recovery, image masking, compositing and FTF1 files without model weights.
     category: functional
     scopes: [pr]
-    timeout_s: 180
+    timeout_s: 300
     workdir: module
     command: bash tests/run_sdk_test.sh core
-  - name: avatar-download-contract
-    description: Verify resource checksums, safe extraction, and Python worker lifecycle.
+
+  - name: avatar-config-contract
+    description: Verifies option defaults, the linked ONNX Runtime, and that the shipped configs pair each persona's UNet and assets.
+    category: functional
+    scopes: [pr]
+    timeout_s: 300
+    workdir: module
+    command: bash tests/test_config_contract.sh
+
+  - name: avatar-invalid-input-error-path
+    description: Verifies invalid streams, frames, options, files and avatar_worker command lines fail fast without producing output.
+    category: functional
+    scopes: [pr]
+    timeout_s: 300
+    workdir: module
+    command: bash tests/test_invalid_input_error_path.sh
+
+  - name: avatar-python-api-contract
+    description: Verifies resource checksums, safe extraction, and the Python worker lifecycle.
     category: functional
     scopes: [pr]
     timeout_s: 120
     workdir: module
     command: bash tests/run_sdk_test.sh python
+
   - name: avatar-installed-sdk-smoke
-    description: Import the installed native bindings and start the installed worker outside the source directory.
+    description: Installs to a temporary prefix, imports the bindings and starts avatar_worker and avatar_file_demo outside the source tree.
     category: functional
     scopes: [pr]
     timeout_s: 300
     workdir: module
     command: bash tests/run_sdk_test.sh installed
+
   - name: avatar-native-parity
-    description: Compare real FeatherHuBERT and UNet results with the Python CPU reference. Accepts an optional second UNet checkpoint.
+    description: Compares real FeatherHuBERT and UNet results with the Python CPU reference. Accepts an optional second UNet checkpoint.
     category: functional
     scopes: [manual, release]
     timeout_s: 600

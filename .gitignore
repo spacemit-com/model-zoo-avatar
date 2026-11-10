@@ -1,9 +1,10 @@
 /build*/
 /dist/
+/python/build/
+/python/dist/
 /output/
 /.venv/
 /python/*.egg-info/
-/*.egg-info/
 **/__pycache__/
 **/*.pyc
 /.pytest_cache/
