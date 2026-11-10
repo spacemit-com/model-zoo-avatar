@@ -123,8 +123,9 @@ cmake -S . -B build && cmake --build build -j4
 ./build/avatar_file_demo --persona feifan
 ```
 
-**Python 文件渲染：**
+**Python 文件渲染**（同样在虚拟环境中安装）：
 ```bash
+python3 -m venv --system-site-packages .venv && source .venv/bin/activate
 python -m build --wheel --no-isolation python
 pip install --no-deps python/dist/spacemit_avatar-*.whl
 python python/examples/avatar_file_demo.py --persona feifan
