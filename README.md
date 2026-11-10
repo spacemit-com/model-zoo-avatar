@@ -30,7 +30,7 @@ WAV ──avatar_worker extract──▶ 特征文件（FTF1）──avatar_work
 
 ## 2. 验证模型
 
-按以下顺序完成依赖安装、模型准备与示例运行。
+按以下顺序完成依赖安装、模型准备与示例运行。以下命令均在 **K3 板端（Bianbu Linux）终端**、组件目录下执行，脚本可直接运行（如 `./scripts/download_models.sh`）；Windows 只能下载资源与运行主机测试，见 [2.2](#22-下载模型)。
 
 ### 2.1. 安装依赖
 
@@ -57,11 +57,11 @@ sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config \
 
 ```bash
 # FeatherHuBERT + 人物 UNet
-bash scripts/download_models.sh --persona feifan
-bash scripts/download_models.sh --persona zihan
+./scripts/download_models.sh --persona feifan
+./scripts/download_models.sh --persona zihan
 # 人物底帧与关键点（--frames 0 为全部 750 帧，默认前 32 帧）及测试音频
-bash scripts/download_assets.sh --persona feifan --frames 0
-bash scripts/download_assets.sh --persona zihan --frames 0
+./scripts/download_assets.sh --persona feifan --frames 0
+./scripts/download_assets.sh --persona zihan --frames 0
 ```
 
 | 内容 | 默认位置 |
@@ -71,6 +71,13 @@ bash scripts/download_assets.sh --persona zihan --frames 0
 | 测试音频 | `~/.cache/assets/avatar/audio/`：`feifan_test.wav`（9.0 s）、`zihan_test.wav`（5.6 s）、本地生成的 `silence.wav` |
 
 其他选项：`--model hubert` 只下载特征模型；`--dry-run` 预览；`--offline` 仅用已缓存归档；`--models-dir`、`--assets-dir`、`--cache-dir` 指定位置（修改后同步修改配置文件中的路径）；`--force` 替换内容不同的已有文件。每个人物的归档约 64 MB，同时包含权重与素材，下载器只解出选中的文件。
+
+**Windows**：只需下载资源时，可直接用 Python 调用下载器，参数与上面相同：
+
+```bat
+python scripts\download_resources.py models --persona feifan
+python scripts\download_resources.py assets --persona feifan --frames 0
+```
 
 ### 2.3. 测试
 
@@ -99,13 +106,13 @@ output/wheels/avatar/spacemit_avatar-0.1.0-cp314-cp314-linux_riscv64.whl
 
 **C++ 文件渲染：**
 ```bash
-bash examples/cpp/run_pipeline.sh configs/feifan.yaml \
+./examples/cpp/run_pipeline.sh configs/feifan.yaml \
   ~/.cache/assets/avatar/audio/feifan_test.wav output/feifan-frames
 ffmpeg -framerate 25 -i output/feifan-frames/%08d.png \
   -i ~/.cache/assets/avatar/audio/feifan_test.wav \
   -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest output/feifan.mp4
 
-bash examples/cpp/run_pipeline.sh configs/zihan.yaml \
+./examples/cpp/run_pipeline.sh configs/zihan.yaml \
   ~/.cache/assets/avatar/audio/zihan_test.wav output/zihan-frames
 ```
 
@@ -127,7 +134,7 @@ cd /path/to/avatar
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
 ctest --test-dir build --output-on-failure
-AVATAR_WORKER="$PWD/build/avatar_worker" bash examples/cpp/run_pipeline.sh configs/feifan.yaml \
+AVATAR_WORKER="$PWD/build/avatar_worker" ./examples/cpp/run_pipeline.sh configs/feifan.yaml \
   ~/.cache/assets/avatar/audio/feifan_test.wav output/feifan-frames
 ```
 
@@ -141,7 +148,7 @@ python examples/python/render_file.py --config configs/feifan.yaml \
   --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/python-frames
 ```
 
-输出目录须不存在或为空；视频帧数为 `ceil(PCM 样本数 / 640)`，底帧按 0→749→0 往返使用。组件测试入口与 `test.yaml` 一致：`bash tests/run_sdk_test.sh core|python|installed`；真实模型差分测试 `parity` 见 [docs/VALIDATION.md](docs/VALIDATION.md)。
+输出目录须不存在或为空；视频帧数为 `ceil(PCM 样本数 / 640)`，底帧按 0→749→0 往返使用。组件测试入口与 `test.yaml` 一致：`./tests/run_sdk_test.sh core|python|installed`；真实模型差分测试 `parity` 见 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
 **说明**：`avatar_worker render` 将每帧拆为预取（解码底帧、计算模型输入）、UNet 推理、按帧序贴回、多线程写 PNG 四段并行执行，输出与逐帧串行处理逐字节一致。FeatherHuBERT 及 worker 的 CPU 线程运行在 X100 0–7；系统 EP 2.0.8 自行放置 A100 线程，在每个 A100 核各起一个、计算只在 A100 8、9 上进行。
 
@@ -255,7 +262,7 @@ target_link_libraries(your_target PRIVATE avatar)
 欢迎参与贡献：提交 Issue 反馈问题，或通过 Pull Request 提交代码。
 
 - **编码规范**：C++ 代码遵循 [Google C++ 风格指南](https://google.github.io/styleguide/cppguide.html)。
-- **提交前检查**：运行 `bash tests/run_sdk_test.sh core`、`python`、`installed`；改动模型前后处理时在 K3 上运行 `parity`。图像前后处理来自 bianbu-avatar，上游版本与代码块哈希见 `config/source-baseline.json`。
+- **提交前检查**：运行 `./tests/run_sdk_test.sh core`、`python`、`installed`；改动模型前后处理时在 K3 上运行 `parity`。图像前后处理来自 bianbu-avatar，上游版本与代码块哈希见 `config/source-baseline.json`。
 
 ## 7. License
 
