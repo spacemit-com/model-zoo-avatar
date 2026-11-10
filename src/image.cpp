@@ -1,16 +1,43 @@
-// Extracted from bianbu-avatar; exact upstream blocks tracked in config/source-baseline.json.
-#include "avatar_service.h"
-#include "non_reentrant.h"
+/*
+ * Copyright (C) 2026 SpacemiT (Hangzhou) Technology Co. Ltd.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Image pre- and post-processing extracted from bianbu-avatar. The upstream
+// blocks, their hashes and the few local deviations are recorded in
+// config/source-baseline.json. PreparedFrame at the end of the file wraps
+// them with validation, ownership and per-instance non-reentrancy.
+
 #include <opencv2/imgproc.hpp>
+
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
+#include <filesystem>  // NOLINT(build/c++17)
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "avatar_service.h"
+#include "non_reentrant.h"
+
 namespace SpacemiT::avatar::detail {
-namespace fs=std::filesystem;
-constexpr int kFaceSize=168,kInnerOffset=4,kInnerSize=160;
-struct FrameAsset {cv::Mat face;cv::Rect bbox,mouthRoi;};
+
+namespace fs = std::filesystem;
+
+constexpr int kFaceSize = 168;
+constexpr int kInnerOffset = 4;
+constexpr int kInnerSize = 160;
+
+struct FrameAsset {
+    cv::Mat face;
+    cv::Rect bbox;
+    cv::Rect mouthRoi;
+};
+
 std::vector<cv::Point2f> readLandmarks(const fs::path& path) {
     std::ifstream stream(path);
     if (!stream) {
@@ -429,8 +456,8 @@ const cv::Mat& createOutputFace(const float* output, const FrameAsset& asset,
                     const auto& p = src[x];
                     lum[x] = static_cast<std::uint8_t>(
                         (77 * static_cast<int>(p[2]) +
-                         150 * static_cast<int>(p[1]) +
-                         29 * static_cast<int>(p[0]) + 128) >> 8);
+                            150 * static_cast<int>(p[1]) +
+                            29 * static_cast<int>(p[0]) + 128) >> 8);
                 }
             }
             cv::blur(scratch.mouthScratch, scratch.mouthBlur, cv::Size(3, 3),
@@ -546,38 +573,103 @@ void pasteResidualFace(const cv::Mat& generatedFace, const cv::Mat& referenceFac
     }
 }
 
-} // namespace detail
+}  // namespace SpacemiT::avatar::detail
+
 namespace SpacemiT::avatar {
+
 struct PreparedFrame::Impl {
-    std::mutex mutex;detail::FrameAsset asset; cv::Mat base,alpha;
-    std::vector<float> input;RenderOptions options;detail::FacePostprocessScratch scratch;
+    std::mutex mutex;
+    detail::FrameAsset asset;
+    cv::Mat base;
+    cv::Mat alpha;
+    std::vector<float> input;
+    RenderOptions options;
+    detail::FacePostprocessScratch scratch;
 };
-PreparedFrame::PreparedFrame(const cv::Mat& bgr,const std::vector<cv::Point2f>& points,const RenderOptions& o):impl_(std::make_unique<Impl>()){SetFrame(bgr,points,o);}
-PreparedFrame::~PreparedFrame()=default;
-void PreparedFrame::SetFrame(const cv::Mat& bgr,const std::vector<cv::Point2f>& points,const RenderOptions& o){
-    auto gate=detail::Enter(impl_->mutex);
-    if(bgr.empty()||bgr.type()!=CV_8UC3||bgr.cols>16384||bgr.rows>16384)throw std::invalid_argument("Expected nonempty uint8 BGR image");
-    if(points.size()<110)throw std::invalid_argument("Expected at least 110 landmarks");
-    for(const auto& p:points)if(!std::isfinite(p.x)||!std::isfinite(p.y)||std::abs(p.x)>1e6f||std::abs(p.y)>1e6f)throw std::invalid_argument("Invalid landmark coordinate");
-    if(!std::isfinite(o.mouth_sharpen)||!std::isfinite(o.smooth_alpha)||!std::isfinite(o.patch_lowpass)||o.mouth_sharpen<0||o.mouth_sharpen>4||o.smooth_alpha<0||o.smooth_alpha>1||o.patch_lowpass<0||o.patch_lowpass>4)throw std::invalid_argument("Invalid render options");
-    detail::FrameAsset next;next.bbox=detail::computeFaceRect(points,bgr.size());
-    cv::resize(bgr(next.bbox),next.face,{168,168},0,0,cv::INTER_AREA);next.mouthRoi=detail::computeMouthRoi(points,next.bbox);
-    auto input=detail::createImageInput(next.face);auto alpha=detail::createAlpha(points,next.bbox,o.feather,o.mouth_only_blend);
-    impl_->base=bgr.clone();impl_->asset=std::move(next);impl_->input=std::move(input);impl_->alpha=std::move(alpha);impl_->options=o;
+
+PreparedFrame::PreparedFrame(const cv::Mat& bgr, const std::vector<cv::Point2f>& landmarks,
+    const RenderOptions& options)
+    : impl_(std::make_unique<Impl>()) {
+    SetFrame(bgr, landmarks, options);
 }
-std::vector<float> PreparedFrame::ImageTensor()const{auto gate=detail::Enter(impl_->mutex);return impl_->input;}
-cv::Rect PreparedFrame::FaceRect()const{auto gate=detail::Enter(impl_->mutex);return impl_->asset.bbox;}
-void PreparedFrame::Reset(){auto gate=detail::Enter(impl_->mutex);impl_->scratch=detail::FacePostprocessScratch{};}
-cv::Mat PreparedFrame::Compose(const std::vector<float>& output){
-    auto gate=detail::Enter(impl_->mutex);
-    if(output.size()!=3*160*160)throw std::invalid_argument("Expected output [1,3,160,160]");
-    for(float v:output)if(!std::isfinite(v))throw std::invalid_argument("Nonfinite generated tensor");
-    const auto& o=impl_->options;auto& s=impl_->scratch;const auto& a=impl_->asset;
-    const auto& face=detail::createOutputFace(output.data(),a,o.native_pasteback?0:o.mouth_sharpen,o.native_pasteback?false:o.temporal_smooth,o.smooth_alpha,o.patch_lowpass,s);
-    const auto& alpha=o.native_pasteback?detail::nativeAlphaMask(a.bbox,s):impl_->alpha;
-    // Native paste-back replaces the face directly, as bianbu-avatar does. The
+
+PreparedFrame::~PreparedFrame() = default;
+
+void PreparedFrame::SetFrame(const cv::Mat& bgr, const std::vector<cv::Point2f>& landmarks,
+    const RenderOptions& options) {
+    auto gate = detail::Enter(impl_->mutex);
+    if (bgr.empty() || bgr.type() != CV_8UC3 || bgr.cols > 16384 || bgr.rows > 16384) {
+        throw std::invalid_argument("Expected nonempty uint8 BGR image");
+    }
+    if (landmarks.size() < 110) {
+        throw std::invalid_argument("Expected at least 110 landmarks");
+    }
+    for (const auto& p : landmarks) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || std::abs(p.x) > 1e6f || std::abs(p.y) > 1e6f) {
+            throw std::invalid_argument("Invalid landmark coordinate");
+        }
+    }
+    const auto& o = options;
+    if (!std::isfinite(o.mouth_sharpen) || !std::isfinite(o.smooth_alpha) || !std::isfinite(o.patch_lowpass) ||
+        o.mouth_sharpen < 0 || o.mouth_sharpen > 4 || o.smooth_alpha < 0 || o.smooth_alpha > 1 ||
+        o.patch_lowpass < 0 || o.patch_lowpass > 4) {
+        throw std::invalid_argument("Invalid render options");
+    }
+    detail::FrameAsset next;
+    next.bbox = detail::computeFaceRect(landmarks, bgr.size());
+    cv::resize(bgr(next.bbox), next.face, {detail::kFaceSize, detail::kFaceSize}, 0, 0, cv::INTER_AREA);
+    next.mouthRoi = detail::computeMouthRoi(landmarks, next.bbox);
+    auto input = detail::createImageInput(next.face);
+    auto alpha = detail::createAlpha(landmarks, next.bbox, o.feather, o.mouth_only_blend);
+    impl_->base = bgr.clone();
+    impl_->asset = std::move(next);
+    impl_->input = std::move(input);
+    impl_->alpha = std::move(alpha);
+    impl_->options = o;
+}
+
+std::vector<float> PreparedFrame::ImageTensor() const {
+    auto gate = detail::Enter(impl_->mutex);
+    return impl_->input;
+}
+
+cv::Rect PreparedFrame::FaceRect() const {
+    auto gate = detail::Enter(impl_->mutex);
+    return impl_->asset.bbox;
+}
+
+void PreparedFrame::Reset() {
+    auto gate = detail::Enter(impl_->mutex);
+    impl_->scratch = detail::FacePostprocessScratch{};
+}
+
+cv::Mat PreparedFrame::Compose(const std::vector<float>& output) {
+    auto gate = detail::Enter(impl_->mutex);
+    if (output.size() != 3 * 160 * 160) {
+        throw std::invalid_argument("Expected output [1,3,160,160]");
+    }
+    for (float v : output) {
+        if (!std::isfinite(v)) {
+            throw std::invalid_argument("Nonfinite generated tensor");
+        }
+    }
+    const auto& o = impl_->options;
+    const auto& asset = impl_->asset;
+    auto& scratch = impl_->scratch;
+    // Native paste-back follows bianbu-avatar: no sharpening or temporal
+    // smoothing, the upstream alpha mask, and a direct face replacement. The
     // residual path would add the source lip edge back over the generated lip.
-    auto result=impl_->base.clone();detail::pasteResidualFace(face,a.face,a.bbox,alpha,1.0f,o.native_pasteback||o.mouth_only_blend,result,s);return result;
+    const auto& face = detail::createOutputFace(output.data(), asset, o.native_pasteback ? 0.0f : o.mouth_sharpen,
+        !o.native_pasteback && o.temporal_smooth, o.smooth_alpha, o.patch_lowpass, scratch);
+    const auto& alpha = o.native_pasteback ? detail::nativeAlphaMask(asset.bbox, scratch) : impl_->alpha;
+    auto result = impl_->base.clone();
+    detail::pasteResidualFace(face, asset.face, asset.bbox, alpha, 1.0f, o.native_pasteback || o.mouth_only_blend,
+        result, scratch);
+    return result;
 }
-std::vector<cv::Point2f> ReadLandmarks(const std::string& path){return detail::readLandmarks(path);}
+
+std::vector<cv::Point2f> ReadLandmarks(const std::string& path) {
+    return detail::readLandmarks(path);
 }
+
+}  // namespace SpacemiT::avatar
