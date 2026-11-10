@@ -174,7 +174,7 @@ void FeatureWriter::Finish(std::uint64_t samples) {
 FeatureReader::FeatureReader(const std::string& path) : stream_(path, std::ios::binary) {
     RequireLittleEndian();
     if (!stream_) {
-        throw std::runtime_error("Cannot open feature file");
+        throw std::runtime_error("Cannot open feature file: " + path);
     }
     std::array<unsigned char, 64> header{};
     ReadExact(stream_, header.data(), header.size());
@@ -188,7 +188,8 @@ FeatureReader::FeatureReader(const std::string& path) : stream_(path, std::ios::
         std::filesystem::file_size(path) != 64 + count_ * kWindowBytes) {
         throw std::runtime_error("FTF file size mismatch");
     }
-    if (count_ != FrameCount(ReadLE(header.data() + 24, 8))) {
+    samples_ = ReadLE(header.data() + 24, 8);
+    if (count_ != FrameCount(samples_)) {
         throw std::runtime_error("Invalid FTF timeline");
     }
 }

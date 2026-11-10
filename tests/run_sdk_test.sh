@@ -67,6 +67,22 @@ case ${1:-} in
         expect_worker_error 'Expected config schema=1' extract --config "$scratch/schema2.yaml" --output out.ftf
         expect_worker_error 'Unknown mode' convert --config configs/feifan.yaml --output out
         expect_worker_error 'features required' render --config configs/feifan.yaml --output "$scratch/frames"
+        expect_worker_error 'max-frames must be nonnegative' render --config configs/feifan.yaml --max-frames -1 \
+            --features "$scratch/missing.ftf" --output "$scratch/frames"
+        # Inputs are checked before a model loads, and a failed command leaves no output behind.
+        expect_worker_error 'Cannot open WAV' extract --config configs/feifan.yaml --audio "$scratch/missing.wav" \
+            --output "$scratch/features/out.ftf"
+        expect_worker_error 'Feature file not found' render --config configs/feifan.yaml \
+            --features "$scratch/missing.ftf" --output "$scratch/frames"
+        expect_worker_error 'only used with an .mp4 output' render --config configs/feifan.yaml \
+            --features "$scratch/missing.ftf" --audio "$scratch/missing.wav" --output "$scratch/frames"
+        touch "$scratch/taken.mp4"
+        expect_worker_error 'Video already exists' render --config configs/feifan.yaml \
+            --features "$scratch/missing.ftf" --output "$scratch/taken.mp4"
+        if [[ -e $scratch/frames || -e $scratch/features ]]; then
+            echo 'a rejected avatar_worker command left output behind' >&2
+            exit 1
+        fi
         echo 'avatar_worker invalid command lines: passed'
         ;;
     python)
