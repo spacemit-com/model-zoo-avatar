@@ -5,9 +5,10 @@
 - `include/avatar_service.h`：RuntimeOptions、FeatureBatch、流式FeatherHubertExtractor、UnetLipGenerator、PreparedFrame。没有暴露Ort::Value或应用服务对象。
 - `src/features.cpp`：原Python滚动特征算法的C++迁移；12000采样点内部分块、20000采样点滚动上下文、640采样点视频拍、左右4帧上下文、1e-3静音门槛、全局frame id。
 - `src/models.cpp`：两张ONNX图的执行、类型/shape及非有限值检查。
-- `src/runtime.cpp`：手动初始化ORT C API、进程内固定一套运行库、按需初始化SpaceMIT EP；不链接或复制私有运行库到源码。
+- `src/runtime.cpp`：用ORT C++ API创建会话选项；provider为 `spacemit` 时通过 `SessionOptionsSpaceMITEnvInit` 启用SpaceMIT EP。构建时链接系统 `spacemit-onnxruntime` 的 `libonnxruntime.so` 与 `libspacemit_ep.so`，不复制运行库到源码或wheel；找不到EP时构建仅CPU的库，并拒绝 `spacemit`。
 - `src/image.cpp`：从旧渲染器提取的11段图像函数及拥有输入、缓冲区、逐流状态的新公共封装。配置显式控制native mask、mouth mask、锐化和时间平滑。
 - `src/cli/worker.cpp`：原生extract/render工具。render按预取（解码、模型输入）、UNet推理、按帧序贴回、多线程写PNG四段流水线并行；贴回在同一份后处理状态上按帧序进行，输出与串行逐帧一致。无MPP/播放器/网络服务依赖。
+- `examples/avatar_file_demo.cpp`：只用公共API逐帧串行渲染的C++示例，输出与worker逐字节一致。
 - `python/avatar_bindings.cpp`：仅做dtype/shape、所有权、GIL和接口转换。
 - `python/spacemit_avatar/pipeline.py`：两个原生子进程的离线编排、取消和超时；没有第二套Python模型算法。
 
@@ -23,4 +24,4 @@
 
 ## 构建和发布
 
-C++17、CMake、可选pybind11、PEP517 setuptools后端。在SDK中构建时（envsetup导出 `SROBOTIS_OUTPUT_ROOT`），CMake的 `avatar-python-wheel` 目标用本次编译的扩展、libavatar与worker打包wheel并安装到 `output/dist`，不重复编译；这些二进制的RPATH同时覆盖构建目录、wheel与安装前缀三种布局。VERSION是构建版本来源。模型和assets独立下载；不因import Python包联网。资源版本与软件版本分开固定，模型和素材通过SHA256绑定。代码以Apache-2.0发布；模型权重的再分发条款见MODEL_CARD.md。
+C++17、CMake、可选pybind11、PEP517 setuptools后端（`python/setup.py`、`python/pyproject.toml`）。`libavatar.a` 为静态库，链接进扩展、worker与示例。在SDK中构建时（envsetup导出 `SROBOTIS_OUTPUT_ROOT`），CMake的 `avatar-python-wheel` 目标用本次编译的扩展与worker打包wheel并安装到 `output/dist`，不重复编译。VERSION是构建版本来源。模型和assets独立下载；不因import Python包联网。资源版本与软件版本分开固定，模型和素材通过SHA256绑定。代码以Apache-2.0发布；模型权重的再分发条款见MODEL_CARD.md。

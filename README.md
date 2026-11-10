@@ -47,7 +47,7 @@ sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config \
   python3-numpy python3-yaml zstd ffmpeg spacemit-onnxruntime
 ```
 
-运行时按配置加载系统的 `libonnxruntime.so` 与 `libspacemit_ep.so`，构建时不链接。头文件不在默认路径时，配置时加 `-DONNXRUNTIME_INCLUDE_DIR=/path/to/include`。
+构建时直接链接 `spacemit-onnxruntime` 提供的 `libonnxruntime.so` 与 `libspacemit_ep.so`。头文件不在默认路径时，配置时加 `-DONNXRUNTIME_INCLUDE_DIR=/path/to/include`；找不到 SpaceMIT EP 时 CMake 给出警告并构建仅 CPU 的库，此时 UNet 无法使用 `spacemit`。
 
 ### 2.2. 下载模型
 
@@ -96,59 +96,75 @@ cd avatar
 mm
 ```
 
-构建完成后，除安装到 `output/staging` 外，wheel 包也会输出到 SDK 根目录下的 `output/dist/`，复用本次编译的扩展、`libavatar` 与 `avatar_worker`，不重复编译。例如：
+构建完成后，除安装到 `output/staging` 外，wheel 包也会输出到 SDK 根目录下的 `output/dist/`，复用本次编译的扩展与 `avatar_worker`，不重复编译。例如：
 
 ```bash
 output/dist/spacemit_avatar-0.1.0-cp314-cp314-linux_riscv64.whl
 ```
 
-**运行**：运行前在 SDK 根目录执行 `source build/envsetup.sh`，使 PATH 与库路径指向 `output/staging`，然后在组件目录下执行：
+**运行**：运行前在 SDK 根目录执行 `source build/envsetup.sh`，使 PATH 与库路径指向 `output/staging`，然后可执行：
 
-**C++ 文件渲染：**
+**C++ 简单示例**（逐帧调用 API，默认读取 2.2 的下载位置）：
 ```bash
-./examples/cpp/run_pipeline.sh configs/feifan.yaml \
-  ~/.cache/assets/avatar/audio/feifan_test.wav output/feifan-frames
-ffmpeg -framerate 25 -i output/feifan-frames/%08d.png \
-  -i ~/.cache/assets/avatar/audio/feifan_test.wav \
-  -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest output/feifan.mp4
+avatar_file_demo --persona feifan --output feifan-frames
+avatar_file_demo --persona zihan --output zihan-frames
+```
 
-./examples/cpp/run_pipeline.sh configs/zihan.yaml \
-  ~/.cache/assets/avatar/audio/zihan_test.wav output/zihan-frames
+**C++ 文件渲染**（`avatar_worker` 两阶段，流水线渲染），在组件目录下执行：
+```bash
+avatar_worker extract --config configs/feifan.yaml \
+  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output feifan.ftf
+avatar_worker render --config configs/feifan.yaml --features feifan.ftf --output feifan-frames
+ffmpeg -framerate 25 -i feifan-frames/%08d.png -i ~/.cache/assets/avatar/audio/feifan_test.wav \
+  -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest feifan.mp4
 ```
 
 **Python 文件渲染**（推荐先在虚拟环境中安装 wheel 包，wheel 内含 `avatar_worker`）：
 ```bash
 python3 -m venv --system-site-packages .venv && source .venv/bin/activate
 pip install --no-deps ../output/dist/spacemit_avatar-0.1.0-*.whl
-python examples/python/render_file.py --config configs/feifan.yaml \
-  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/python-frames
+python python/examples/render_file.py --config configs/feifan.yaml \
+  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output python-frames
 ```
 
 #### 2.3.2. 独立构建下验证
 
 在 Avatar 组件目录下完成编译后，运行下列示例。
 
-**C++ 文件渲染：**
+**C++ 示例：**
 ```bash
 cd /path/to/avatar
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -G Ninja
 cmake --build build -j4
-ctest --test-dir build --output-on-failure
-AVATAR_WORKER="$PWD/build/avatar_worker" ./examples/cpp/run_pipeline.sh configs/feifan.yaml \
-  ~/.cache/assets/avatar/audio/feifan_test.wav output/feifan-frames
+./build/avatar_file_demo --persona feifan --output feifan-frames
+./build/avatar_worker extract --config configs/feifan.yaml \
+  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output feifan.ftf
+./build/avatar_worker render --config configs/feifan.yaml --features feifan.ftf --output worker-frames
 ```
 
-**Python 文件渲染：**
+**Python 示例：**
 ```bash
 cd /path/to/avatar
 python3 -m venv --system-site-packages .venv && source .venv/bin/activate
-python -m build --wheel --no-isolation
-pip install --no-deps dist/spacemit_avatar-*.whl
-python examples/python/render_file.py --config configs/feifan.yaml \
-  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/python-frames
+python -m build --wheel --no-isolation python
+pip install --no-deps python/dist/spacemit_avatar-*.whl
+python python/examples/render_file.py --config configs/feifan.yaml \
+  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output python-frames
 ```
 
-输出目录须不存在或为空；视频帧数为 `ceil(PCM 样本数 / 640)`，底帧按 0→749→0 往返使用。组件测试入口与 `test.yaml` 一致：`./tests/run_sdk_test.sh core|python|installed`；真实模型差分测试 `parity` 见 [docs/VALIDATION.md](docs/VALIDATION.md)。
+输出目录须不存在或为空；视频帧数为 `ceil(PCM 样本数 / 640)`，底帧按 0→749→0 往返使用。`avatar_file_demo` 默认 UNet 使用 `spacemit`，可用 `--audio`、`--max-frames` 指定音频与帧数。
+
+**组件测试**：入口与 `test.yaml` 一致，均不需要模型：
+
+```bash
+./tests/run_sdk_test.sh core            # C++ 契约（ctest）
+./tests/run_sdk_test.sh config          # 默认参数、链接的 ORT 与自带配置
+./tests/run_sdk_test.sh invalid-input   # 非法输入与 avatar_worker 命令行
+./tests/run_sdk_test.sh python          # 下载器与 worker 生命周期
+./tests/run_sdk_test.sh installed       # 安装到临时目录后加载
+```
+
+真实模型差分测试 `parity` 见 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
 **说明**：`avatar_worker render` 将每帧拆为预取（解码底帧、计算模型输入）、UNet 推理、按帧序贴回、多线程写 PNG 四段并行执行，输出与逐帧串行处理逐字节一致。FeatherHuBERT 及 worker 的 CPU 线程运行在 X100 0–7；系统 EP 2.0.8 自行放置 A100 线程，在每个 A100 核各起一个、计算只在 A100 8、9 上进行。
 
@@ -163,15 +179,15 @@ python examples/python/render_file.py --config configs/feifan.yaml \
 | 产物 | 说明 |
 | ---- | ---- |
 | `include/avatar_service.h` | **C++ API 头文件**，应用侧只需包含此头文件并链接下方库即可调用 |
-| `libavatar.so` | C++ 核心库（SDK：`output/staging/lib/`；独立构建：`build/`） |
+| `libavatar.a` | C++ 核心库（SDK：`output/staging/lib/`；独立构建：`build/`），链接时还需 OpenCV 与 `spacemit-onnxruntime` |
 | `avatar_worker` | 离线文件渲染命令行（SDK：`output/staging/bin/`；独立构建：`build/`） |
-| `spacemit_avatar-0.1.0-*.whl` | Python wheel 包（SDK：`output/dist/`；独立构建：`python -m build` 输出到 `dist/`，或配置时加 `-DAVATAR_BUILD_WHEEL=ON`），`pip install` 后 `import spacemit_avatar` |
+| `spacemit_avatar-0.1.0-*.whl` | Python wheel 包（SDK：`output/dist/`；独立构建：`python -m build --wheel --no-isolation python` 输出到 `python/dist/`），`pip install` 后 `import spacemit_avatar` |
 
-示例程序（非集成必需）：`examples/cpp/run_pipeline.sh`、`examples/python/render_file.py`。运行与验证步骤见 [2.3.1](#231-在-sdk-中验证) 或 [2.3.2](#232-独立构建下验证)。
+示例程序（非集成必需）：`examples/avatar_file_demo.cpp`（编译为 `avatar_file_demo`）、`python/examples/render_file.py`。运行与验证步骤见 [2.3.1](#231-在-sdk-中验证) 或 [2.3.2](#232-独立构建下验证)。
 
 ### 3.2. API 使用
 
-**C++**：头文件 `include/avatar_service.h` 为唯一 API 入口，实现为 PIMPL。在业务代码中 `#include "avatar_service.h"`，链接 `libavatar.so`（及 OpenCV），即可使用；ONNX Runtime 与 SpaceMIT EP 在运行时按 `RuntimeOptions` 加载。
+**C++**：头文件 `include/avatar_service.h` 为唯一 API 入口，实现为 PIMPL。在业务代码中 `#include "avatar_service.h"`，链接 `libavatar.a`（及 OpenCV、ONNX Runtime、SpaceMIT EP），即可使用。完整的逐帧示例见 `examples/avatar_file_demo.cpp`。
 
 ```cpp
 #include "avatar_service.h"
@@ -192,7 +208,7 @@ std::vector<float> window(batch.values.begin(), batch.values.begin() + kWindowEl
 cv::Mat image = frame.Compose(unet.Infer(frame.ImageTensor(), window));
 ```
 
-**Python**：安装后 `import spacemit_avatar`，详见 `examples/python/` 与 [API.md](API.md)。
+**Python**：安装后 `import spacemit_avatar`，详见 `python/examples/` 与 [API.md](API.md)。
 
 ```python
 import spacemit_avatar
@@ -210,7 +226,7 @@ add_subdirectory(avatar)
 target_link_libraries(your_target PRIVATE avatar)
 ```
 
-使用约束：模型实例不可并发调用，`final` 之后须 `Reset()` 才能继续输入；同一进程只能加载一套 ONNX Runtime，两个模型使用同一个 `libonnxruntime.so`；`AvatarService` 的两个 worker 进程相互隔离，取消或失败时已写出的部分 PNG 不能当作完整结果。
+使用约束：模型实例不可并发调用，`final` 之后须 `Reset()` 才能继续输入；`AvatarService` 的两个 worker 进程相互隔离，取消或失败时已写出的部分 PNG 不能当作完整结果。
 
 ### 3.3. 配置参数
 
@@ -220,10 +236,9 @@ target_link_libraries(your_target PRIVATE avatar)
 |------|------|--------|------|
 | `hubert.model` / `unet.model` | `string` | — | 模型路径（必填） |
 | `*.provider` | `string` | `cpu` | FeatherHuBERT 为 `cpu`；人物 UNet 为 `spacemit` |
-| `*.ort_library` | `string` | `libonnxruntime.so` | ONNX Runtime 库 |
-| `unet.ep_library` | `string` | `libspacemit_ep.so` | SpaceMIT EP 库 |
 | `*.threads` | `int` | `4` | ORT 线程数；UNet 中为处理 EP 不支持节点的 CPU 线程数 |
 | `unet.ep_threads` | `int` | `2` | EP 计算线程数 |
+| `*.profile_prefix` | `string` | 不记录 | ORT 性能分析输出前缀，用于确认 EP 实际执行 |
 | `*.cpu_affinity` | `int[]` | 不绑核 | 进程绑核，自带配置为 `[0, 1, 2, 3, 4, 5, 6, 7]` |
 | `*.timeout_s` | `float` | `3600` | `AvatarService` 中该阶段超时 |
 | `assets.person` | `string` | — | 人物素材目录，含 `full_body_img/` 与 `landmarks/`（必填） |
@@ -243,8 +258,7 @@ target_link_libraries(your_target PRIVATE avatar)
 | 下载报 404 或校验失败 | 资源地址变更或本地仓库较旧 | 更新仓库后重新下载；`--force` 替换内容不同的旧文件。 |
 | 提示 WAV 格式不支持 | 采样率或声道不符 | 用 `ffmpeg -i in.wav -ar 16000 -ac 1 -c:a pcm_s16le out.wav` 转换。 |
 | 提示输出目录非空 | 防止混入旧帧 | 使用新的或空的输出目录。 |
-| `One ORT binary per process` | 同一进程选择了两套 ORT | 两个模型使用同一 `ort_library`，或改用 `AvatarService`。 |
-| 无法加载 `libspacemit_ep.so` | 未安装 `spacemit-onnxruntime` | 安装该软件包，或在配置中写明库的绝对路径。 |
+| `This build has no SpaceMIT EP` | 构建时未找到 SpaceMIT EP | 安装 `spacemit-onnxruntime` 后重新构建。 |
 | 8–15 号核上都有 EP 线程 | 系统 EP 2.0.8 在每个 A100 核各起一个线程 | 正常现象：只有 A100 8、9 上的 2 个线程在计算，其余空闲。 |
 | `pip install` 提示 externally-managed-environment | 系统 Python 受保护 | 在 `python3 -m venv --system-site-packages` 创建的虚拟环境中安装。 |
 | 无法解压 `.tar.zst` | 缺少 zstd | 安装 `zstd` 或 `python3-zstandard`。 |
@@ -261,8 +275,8 @@ target_link_libraries(your_target PRIVATE avatar)
 
 欢迎参与贡献：提交 Issue 反馈问题，或通过 Pull Request 提交代码。
 
-- **编码规范**：C++ 代码遵循 [Google C++ 风格指南](https://google.github.io/styleguide/cppguide.html)。
-- **提交前检查**：运行 `./tests/run_sdk_test.sh core`、`python`、`installed`；改动模型前后处理时在 K3 上运行 `parity`。图像前后处理来自 bianbu-avatar，上游版本与代码块哈希见 `config/source-baseline.json`。
+- **编码规范**：C++ 代码遵循 [Google C++ 风格指南](https://google.github.io/styleguide/cppguide.html)（4 空格缩进、120 列），提交时由 `code-style` 工作流运行 cpplint、shellcheck 与 ruff。
+- **提交前检查**：运行 `./tests/run_sdk_test.sh core`、`config`、`invalid-input`、`python`、`installed`；改动模型前后处理时在 K3 上运行 `parity`。图像前后处理来自 bianbu-avatar，上游版本、代码块哈希与本地改动见 `config/source-baseline.json`。
 
 ## 7. License
 
