@@ -6,7 +6,7 @@
 /*
  * avatar_worker: offline two-stage rendering.
  *   extract  WAV -> FTF1 feature file (FeatherHuBERT)
- *   render   FTF1 -> PNG frames, or an MP4 encoded by ffmpeg (person UNet, pipelined)
+ *   render   FTF1 -> PNG frames, or an H.264 MP4 encoded through ffmpeg (person UNet, pipelined)
  * Each stage prints a performance report on stderr and a JSON result line on stdout.
  */
 
@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -34,6 +35,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <fstream>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <iomanip>
 #include <iostream>
@@ -243,15 +245,60 @@ private:
     OutputDirectory lock_;
 };
 
-// Streams raw BGR frames to ffmpeg, which encodes H.264 and adds the audio.
-// libx264 "veryfast" encodes about 58 fps of 1280x720 on the K3 X100 cores, so
-// the UNet stays the bottleneck. The video gets its final name only after
-// ffmpeg succeeds; a failed or cancelled render leaves no partial file.
+// Runs a command with stdin, stdout and stderr on /dev/null and returns its exit status, or -1.
+int RunQuietly(std::vector<std::string> args) {
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+        argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    pid_t pid = -1;
+    const int error = posix_spawn(&pid, argv[0], &actions, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    int status = 0;
+    if (error || waitpid(pid, &status, 0) < 0 || !WIFEXITED(status)) {
+        return -1;
+    }
+    return WEXITSTATUS(status);
+}
+
+// H.264 encoder for MP4 output. On K3 the video engine behind the ffmpeg
+// encoder h264_stcodec encodes 1280x720 at about 250 fps for 4.4 ms of CPU per
+// frame; libx264 veryfast needs about 107 ms of CPU per frame on the X100
+// cores and is the fallback on machines without the engine.
+struct VideoEncoder {
+    std::string name;
+    bool hardware = false;
+    std::string label;  // for the report
+};
+
+// Encodes one black frame of the output size; this takes about 0.13 s on K3.
+VideoEncoder ChooseVideoEncoder(const std::string& ffmpeg, cv::Size size) {
+    const auto geometry = std::to_string(size.width) + "x" + std::to_string(size.height);
+    if (RunQuietly({ffmpeg, "-hide_banner", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=" + geometry + ":r=25",
+            "-frames:v", "1", "-pix_fmt", "yuv420p", "-c:v", "h264_stcodec", "-f", "null", "-"}) == 0) {
+        return {"h264_stcodec", true, "h264_stcodec (K3 hardware)"};
+    }
+    return {"libx264", false, "libx264 veryfast (software, h264_stcodec unavailable)"};
+}
+
+// Streams frames to ffmpeg, which encodes H.264 and adds the audio. The
+// hardware encoder takes I420 converted here with OpenCV, about 1 ms per frame
+// against 20 ms for the conversion inside ffmpeg. libx264 takes BGR and keeps
+// the ffmpeg chroma subsampling, which it encodes at higher quality. The video
+// gets its final name only after ffmpeg succeeds; a failed or cancelled render
+// leaves no partial file.
 class Mp4Sink : public FrameSink {
 public:
-    Mp4Sink(fs::path video, std::string audio, std::string ffmpeg)
+    Mp4Sink(fs::path video, std::string audio, std::string ffmpeg, VideoEncoder encoder)
         : video_(std::move(video)), audio_(std::move(audio)), ffmpeg_(std::move(ffmpeg)),
-        partial_(video_.string() + "." + std::to_string(getpid()) + ".part") {}
+        encoder_(std::move(encoder)), partial_(video_.string() + "." + std::to_string(getpid()) + ".part"),
+        log_(partial_ + ".log") {}
     ~Mp4Sink() override { Stop(); }
     Mp4Sink(const Mp4Sink&) = delete;
     Mp4Sink& operator=(const Mp4Sink&) = delete;
@@ -266,8 +313,13 @@ public:
         } else if (image.cols != width_ || image.rows != height_) {
             throw std::runtime_error("Base frames differ in size");
         }
-        const unsigned char* data = image.data;
-        std::size_t left = image.total() * image.elemSize();
+        const cv::Mat* pixels = &image;
+        if (encoder_.hardware) {
+            cv::cvtColor(image, yuv_, cv::COLOR_BGR2YUV_I420);
+            pixels = &yuv_;
+        }
+        const unsigned char* data = pixels->data;
+        std::size_t left = pixels->total() * pixels->elemSize();
         while (left) {
             const auto written = write(input_, data, left);
             if (written < 0 && errno == EINTR) {
@@ -277,9 +329,9 @@ public:
                 const int error = errno;
                 CheckCancel();
                 if (error == EPIPE) {
-                    throw std::runtime_error("ffmpeg stopped reading frames");
+                    throw std::runtime_error("ffmpeg stopped reading frames" + LogTail());
                 }
-                throw std::runtime_error(std::string("Cannot write to ffmpeg: ") + std::strerror(error));
+                throw std::runtime_error(std::string("Cannot write to ffmpeg: ") + std::strerror(error) + LogTail());
             }
             data += written;
             left -= static_cast<std::size_t>(written);
@@ -294,7 +346,7 @@ public:
         int status = 0;
         rusage usage{};
         if (pid < 0 || wait4(pid, &status, 0, &usage) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            throw std::runtime_error("ffmpeg failed to encode " + video_.string());
+            throw std::runtime_error("ffmpeg (" + encoder_.name + ") failed to encode " + video_.string() + LogTail());
         }
         cpu_seconds_ = TimevalSeconds(usage.ru_utime) + TimevalSeconds(usage.ru_stime);
         if (fs::exists(video_)) {
@@ -305,6 +357,7 @@ public:
     }
 
     double EncoderCpuSeconds() const { return cpu_seconds_; }
+    const VideoEncoder& Encoder() const { return encoder_; }
 
 private:
     static double TimevalSeconds(const timeval& value) {
@@ -315,12 +368,16 @@ private:
         width_ = width;
         height_ = height;
         std::vector<std::string> args = {ffmpeg_, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo",
-            "-pix_fmt", "bgr24", "-s", std::to_string(width) + "x" + std::to_string(height), "-framerate", "25",
-            "-i", "pipe:0"};
+            "-pix_fmt", encoder_.hardware ? "yuv420p" : "bgr24", "-s",
+            std::to_string(width) + "x" + std::to_string(height), "-framerate", "25", "-i", "pipe:0"};
         if (!audio_.empty()) {
             args.insert(args.end(), {"-i", audio_});
         }
-        args.insert(args.end(), {"-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"});
+        if (encoder_.hardware) {
+            args.insert(args.end(), {"-c:v", "h264_stcodec"});
+        } else {
+            args.insert(args.end(), {"-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"});
+        }
         if (!audio_.empty()) {
             args.insert(args.end(), {"-c:a", "aac"});
         }
@@ -339,6 +396,9 @@ private:
         posix_spawn_file_actions_init(&actions);
         posix_spawn_file_actions_adddup2(&actions, fds[0], STDIN_FILENO);
         posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+        // The hardware encoder logs on stderr even at -loglevel error. Keep that out
+        // of the report; an error message quotes the end of it.
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, log_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         // The worker ignores SIGPIPE to report a dead ffmpeg; ffmpeg itself keeps the default.
         posix_spawnattr_t attributes;
         posix_spawnattr_init(&attributes);
@@ -371,16 +431,39 @@ private:
             waitpid(pid_, nullptr, 0);
             pid_ = -1;
         }
+        std::error_code ignored;
         if (!finished_) {
-            std::error_code ignored;
             fs::remove(partial_, ignored);
         }
+        fs::remove(log_, ignored);
+    }
+
+    // The last lines ffmpeg wrote on stderr, for an error message.
+    std::string LogTail() const {
+        std::ifstream stream(log_);
+        std::deque<std::string> lines;
+        for (std::string line; std::getline(stream, line);) {
+            if (!line.empty()) {
+                lines.push_back(line);
+            }
+            if (lines.size() > 3) {
+                lines.pop_front();
+            }
+        }
+        std::string tail;
+        for (const auto& line : lines) {
+            tail += (tail.empty() ? ": " : " | ") + line;
+        }
+        return tail;
     }
 
     fs::path video_;
     std::string audio_;
     std::string ffmpeg_;
+    VideoEncoder encoder_;
     std::string partial_;
+    std::string log_;
+    cv::Mat yuv_;
     int width_ = 0;
     int height_ = 0;
     pid_t pid_ = -1;
@@ -735,6 +818,7 @@ struct RenderSummary {
     double decode = 0, landmarks = 0, preprocess = 0, unet = 0, compose = 0, write = 0;  // ms per frame
     std::string bottleneck;
     double bottleneck_fps = 0;
+    VideoEncoder encoder;
 };
 
 RenderSummary Summarize(const RenderStats& stats, const FrameSink& sink, std::uint64_t frames) {
@@ -779,7 +863,7 @@ void PrintRenderReport(const RenderSummary& s, const FrameSink& sink, const Argu
         "  per frame  decode %.1f | landmarks %.1f | preprocess %.1f | UNet %.1f | compose %.1f | %s %.1f ms\n",
         s.decode, s.landmarks, s.preprocess, s.unet, s.compose, sink.WriteLabel(), s.write);
     if (s.video) {
-        std::fprintf(stderr, "  encoder    ffmpeg libx264 veryfast, %.1f ms CPU per frame%s\n",
+        std::fprintf(stderr, "  encoder    %s, ffmpeg %.1f ms CPU per frame%s\n", s.encoder.label.c_str(),
             s.encoder_cpu_s * 1000 / static_cast<double>(s.frames), args.audio.empty() ? ", no audio track" : "");
     }
     std::fprintf(stderr, "  bottleneck %s, at most %.1f fps\n", s.bottleneck.c_str(), s.bottleneck_fps);
@@ -793,7 +877,8 @@ std::string RenderJson(const RenderSummary& s) {
         ",\"preprocess\":" + Number(s.preprocess) + ",\"unet\":" + Number(s.unet) +
         ",\"compose\":" + Number(s.compose) + ",\"write\":" + Number(s.write) + "}";
     if (s.video) {
-        json += ",\"encoder_cpu_ms\":" + Number(s.encoder_cpu_s * 1000 / static_cast<double>(s.frames));
+        json += ",\"encoder\":\"" + s.encoder.name + "\",\"encoder_cpu_ms\":" +
+            Number(s.encoder_cpu_s * 1000 / static_cast<double>(s.frames));
     }
     return json;
 }
@@ -829,6 +914,15 @@ Outcome RenderFrames(const YAML::Node& config, const fs::path& folder, const Arg
         }
     }
     const auto frames = ListFrames(fs::path(ResolvePath(config["assets"]["person"].as<std::string>(), folder)));
+    VideoEncoder encoder;
+    if (video) {
+        const auto size = cv::imread(frames.front().first.string(), cv::IMREAD_COLOR).size();
+        if (size.empty() || size.width % 2 || size.height % 2) {
+            throw std::runtime_error("MP4 output needs base frames with an even width and height: " +
+                frames.front().first.string());
+        }
+        encoder = ChooseVideoEncoder(ffmpeg, size);
+    }
     const auto options = ReadRender(config["render"]);
     const auto total = args.max_frames ? std::min<std::uint64_t>(args.max_frames, reader.Count()) : reader.Count();
     if (!total) {
@@ -842,11 +936,11 @@ Outcome RenderFrames(const YAML::Node& config, const fs::path& folder, const Arg
     const double load_s = Seconds(Clock::now() - load_start);
 
     std::unique_ptr<FrameSink> sink;
-    Mp4Sink* encoder = nullptr;
+    Mp4Sink* mp4_sink = nullptr;
     if (video) {
         CreateParent(args.output);
-        auto mp4 = std::make_unique<Mp4Sink>(args.output, args.audio, ffmpeg);
-        encoder = mp4.get();
+        auto mp4 = std::make_unique<Mp4Sink>(args.output, args.audio, ffmpeg, encoder);
+        mp4_sink = mp4.get();
         sink = std::move(mp4);
     } else {
         sink = std::make_unique<PngSink>(args.output);
@@ -863,7 +957,10 @@ Outcome RenderFrames(const YAML::Node& config, const fs::path& folder, const Arg
     summary.render_s = Seconds(finish_start - stats.start);
     summary.finish_s = Seconds(end - finish_start);
     summary.total_s = Seconds(end - start);
-    summary.encoder_cpu_s = encoder ? encoder->EncoderCpuSeconds() : 0.0;
+    if (mp4_sink) {
+        summary.encoder_cpu_s = mp4_sink->EncoderCpuSeconds();
+        summary.encoder = mp4_sink->Encoder();
+    }
     const double busy_s = summary.render_s + summary.finish_s;
     summary.fps = static_cast<double>(count) / busy_s;
     summary.rtf = busy_s * kFps / static_cast<double>(count);
