@@ -1,4 +1,4 @@
-include VERSION CMakeLists.txt LICENSE NOTICE README.md package.xml test.yaml
+include VERSION CMakeLists.txt LICENSE NOTICE README.md API.md package.xml test.yaml
 recursive-include include *.h
 recursive-include src *.h *.cpp
 recursive-include examples *.cpp *.py *.sh
