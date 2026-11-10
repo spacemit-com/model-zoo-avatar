@@ -10,9 +10,15 @@
 #include <sstream>
 #include <memory>
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <csignal>
 #include <charconv>
+#include <deque>
+#include <exception>
+#include <mutex>
+#include <thread>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -45,6 +51,125 @@ public:
 private:
     int fd_;
 };
+// Bounded FIFO between render stages. Close() wakes every waiter; Pop() still
+// drains queued items before it reports the end of the stream.
+template <typename T>
+class Channel {
+public:
+    explicit Channel(std::size_t capacity) : capacity_(capacity) {}
+    bool Push(T value) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        space_.wait(lock, [&] { return closed_ || items_.size() < capacity_; });
+        if (closed_) return false;
+        items_.push_back(std::move(value));
+        ready_.notify_one();
+        return true;
+    }
+    bool Pop(T& value) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        ready_.wait(lock, [&] { return closed_ || !items_.empty(); });
+        if (items_.empty()) return false;
+        value = std::move(items_.front());
+        items_.pop_front();
+        space_.notify_one();
+        return true;
+    }
+    void Close() {
+        { std::lock_guard<std::mutex> lock(mutex_); closed_ = true; }
+        ready_.notify_all();
+        space_.notify_all();
+    }
+private:
+    std::mutex mutex_;
+    std::condition_variable ready_, space_;
+    std::deque<T> items_;
+    std::size_t capacity_;
+    bool closed_ = false;
+};
+struct SourceFrame { std::uint64_t index; cv::Mat image; std::vector<cv::Point2f> landmarks; std::vector<float> input; };
+struct GeneratedFrame { std::uint64_t index; cv::Mat image; std::vector<cv::Point2f> landmarks; std::vector<float> output; };
+struct ComposedFrame { std::uint64_t index; cv::Mat image; };
+using FramePaths = std::vector<std::pair<fs::path, fs::path>>;
+// Keeps the EP busy while X100 threads decode, composite and encode the
+// neighbouring frames:
+//   prefetch (decode, model input) -> UNet on this thread -> compose -> PNG writers.
+// Compose runs in frame order on a single PreparedFrame, whose post-processing
+// state carries across frames exactly as in a serial loop, so the frames are
+// unchanged. Model inputs come from a separate PreparedFrame, which keeps no
+// state that affects them.
+std::uint64_t Render(UnetLipGenerator& model, detail::FeatureReader& reader, std::uint64_t total,
+                     const FramePaths& frames, const RenderOptions& options, const fs::path& output) {
+    constexpr std::size_t kDepth = 4, kWriters = 3;
+    Channel<SourceFrame> sources(kDepth);
+    Channel<GeneratedFrame> generated(kDepth);
+    Channel<ComposedFrame> composed(kDepth);
+    std::atomic<bool> failed{false};
+    std::atomic<std::uint64_t> written{0};
+    std::mutex error_mutex;
+    std::exception_ptr error;
+    auto fail = [&](std::exception_ptr cause) {
+        { std::lock_guard<std::mutex> lock(error_mutex); if (!error) error = cause; }
+        failed = true;
+        sources.Close(); generated.Close(); composed.Close();
+    };
+    const auto period = frames.size() == 1 ? 1 : 2 * frames.size() - 2;
+    std::vector<std::thread> threads;
+    threads.emplace_back([&] {
+        try {
+            std::unique_ptr<PreparedFrame> frame;
+            for (std::uint64_t i = 0; i < total && !failed; ++i) {
+                const auto at = i % period;
+                const auto& paths = frames[at < frames.size() ? at : period - at];
+                SourceFrame item{i, cv::imread(paths.first.string(), cv::IMREAD_COLOR), ReadLandmarks(paths.second.string()), {}};
+                if (!frame) frame = std::make_unique<PreparedFrame>(item.image, item.landmarks, options);
+                else frame->SetFrame(item.image, item.landmarks, options);
+                item.input = frame->ImageTensor();
+                if (!sources.Push(std::move(item))) return;
+            }
+            sources.Close();
+        } catch (...) { fail(std::current_exception()); }
+    });
+    threads.emplace_back([&] {
+        try {
+            std::unique_ptr<PreparedFrame> frame;
+            GeneratedFrame item;
+            while (generated.Pop(item)) {
+                if (failed) return;
+                if (!frame) frame = std::make_unique<PreparedFrame>(item.image, item.landmarks, options);
+                else frame->SetFrame(item.image, item.landmarks, options);
+                if (!composed.Push({item.index, frame->Compose(item.output)})) return;
+            }
+            composed.Close();
+        } catch (...) { fail(std::current_exception()); }
+    });
+    for (std::size_t i = 0; i < kWriters; ++i) threads.emplace_back([&] {
+        try {
+            ComposedFrame item;
+            while (composed.Pop(item)) {
+                if (failed) return;
+                std::ostringstream name;
+                name << std::setw(8) << std::setfill('0') << item.index << ".png";
+                if (!cv::imwrite((output / name.str()).string(), item.image)) throw std::runtime_error("Image write failed");
+                ++written;
+            }
+        } catch (...) { fail(std::current_exception()); }
+    });
+    try {
+        std::vector<float> window;
+        SourceFrame item;
+        while (!failed && sources.Pop(item)) {
+            check_cancel();
+            if (!reader.Next(window)) throw std::runtime_error("Feature file ended early");
+            auto generated_face = model.Infer(item.input, window);
+            check_cancel();
+            if (!generated.Push({item.index, std::move(item.image), std::move(item.landmarks), std::move(generated_face)})) break;
+        }
+        generated.Close();
+    } catch (...) { fail(std::current_exception()); }
+    for (auto& thread : threads) thread.join();
+    if (error) std::rethrow_exception(error);
+    return written;
+}
 }
 std::string path(const std::string& value,const fs::path& folder){
     if(value.empty())throw std::invalid_argument("Empty resource path");
@@ -125,16 +250,9 @@ int main(int argc,char** argv){
             if(parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size())throw std::invalid_argument("max-frames must be nonnegative");
         }
         const OutputDirectory output_directory(args.at("--output"));
-        detail::FeatureReader reader(args.at("--features"));std::vector<float> window;std::unique_ptr<PreparedFrame> frame;
-        while((!limit||count<limit)&&reader.Next(window)){
-            check_cancel();
-            const auto period=frames.size()==1?1:2*frames.size()-2;const auto at=count%period;const auto index=at<frames.size()?at:period-at;
-            auto image=cv::imread(frames[index].first.string(),cv::IMREAD_COLOR);auto landmarks=ReadLandmarks(frames[index].second.string());
-            if(!frame)frame=std::make_unique<PreparedFrame>(image,landmarks,ro);else frame->SetFrame(image,landmarks,ro);
-            auto output=model.Infer(frame->ImageTensor(),window);check_cancel();auto composed=frame->Compose(output);
-            std::ostringstream name;name<<std::setw(8)<<std::setfill('0')<<count<<".png";
-            if(!cv::imwrite((fs::path(args.at("--output"))/name.str()).string(),composed))throw std::runtime_error("Image write failed");++count;
-        }
+        detail::FeatureReader reader(args.at("--features"));
+        const auto total=limit?std::min<std::uint64_t>(limit,reader.Count()):reader.Count();
+        count=Render(model,reader,total,frames,ro,fs::path(args.at("--output")));
     }else throw std::invalid_argument("Unknown mode");
     const auto ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
     std::cout<<"{\"ok\":true,\"frames\":"<<count<<",\"elapsed_ms\":"<<ms<<"}\n";return 0;

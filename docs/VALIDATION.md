@@ -29,7 +29,7 @@ python3 tests/python/native_parity.py --mode unet \
 
 特征模式应选Python onnxruntime自身使用的CPU ORT，避免在同进程装载不同二进制。UNet参考在独立Python子进程中产生，父进程只加载所选原生运行库。
 
-EP验证在CPU/核权限允许时使用 `--provider spacemit --ep-library /path/to/libspacemit_ep.so --affinity '12;13' --profile output/unet-profile`，并解析profile检查真实Resize覆盖。不要为测试抢占正在使用的数字人工程或更改其unit/cpuset；本组件不自动管理其它服务。
+EP验证使用系统库 `--provider spacemit --ep-library /usr/lib/libspacemit_ep.so --profile output/unet-profile`，并解析profile检查真实Resize覆盖。系统EP 2.0.8自行放置A100线程，`--affinity` 不生效。不要为测试抢占正在使用的数字人工程或更改其unit/cpuset；本组件不自动管理其它服务。
 
 用 `python3 scripts/verify_ep_profile.py <实际profile.json>` 进行覆盖门禁。2026-11-05的66板实测系统EP 2.0.8仍有4个CPU Resize事件；已验证优化配套库为0个CPU Resize事件、1个EP子图。两组数值对照都可通过，但仅后者满足“Resize全部下沉”。不依赖版本字符串推断覆盖能力，也不把优化库复制入wheel冒充系统包已支持。
 

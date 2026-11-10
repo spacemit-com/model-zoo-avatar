@@ -1,0 +1,28 @@
+schema: 1
+# FeatherHuBERT runs on the CPU with four threads on X100 0-7; the SpaceMIT EP
+# does not cover it. The person UNet runs on the SpaceMIT EP from the system
+# spacemit-onnxruntime package with two compute threads. The worker process,
+# its prefetch, compose and PNG writer threads, and ORT's four CPU fallback
+# threads for nodes the EP declines stay on X100 0-7.
+# The system EP 2.0.8 places its own A100 workers (one per core, computing on
+# A100 8 and 9 on K3) and ignores ep_affinity, so it is not set here.
+hubert:
+  model: ~/.cache/models/avatar/feather_hubert_dynamic.onnx
+  provider: cpu
+  ort_library: libonnxruntime.so
+  threads: 4
+  cpu_affinity: [0, 1, 2, 3, 4, 5, 6, 7]
+unet:
+  model: ~/.cache/models/avatar/zihan_int8.onnx
+  provider: spacemit
+  ort_library: libonnxruntime.so
+  ep_library: libspacemit_ep.so
+  threads: 4
+  ep_threads: 2
+  cpu_affinity: [0, 1, 2, 3, 4, 5, 6, 7]
+assets:
+  person: ~/.cache/assets/avatar/zihan
+render:
+  feather: true
+  native_pasteback: true
+  mouth_only_blend: false
