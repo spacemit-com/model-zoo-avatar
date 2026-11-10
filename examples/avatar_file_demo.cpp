@@ -4,22 +4,28 @@
  */
 
 /*
- * avatar_file_demo: render a persona speaking a WAV file with the public API.
+ * avatar_file_demo: render a persona speaking a WAV file with the public API,
+ * then mux the frames and the audio into an MP4 with ffmpeg.
  *
  * Models and assets default to the downloader cache:
  *   ~/.cache/models/avatar/{feather_hubert_dynamic.onnx,<persona>_int8.onnx}
  *   ~/.cache/assets/avatar/<persona>/{full_body_img,landmarks}
  *   ~/.cache/assets/avatar/audio/<persona>_test.wav
+ * Output defaults to output/<persona>-frames/ and output/<persona>.mp4.
  *
  * The demo runs frame by frame for clarity; avatar_worker renders the same
  * frames with a pipeline.
  */
 
+#include <spawn.h>
+#include <sys/wait.h>
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <iomanip>
 #include <iostream>
@@ -31,6 +37,8 @@
 
 #include "avatar_service.h"
 
+extern char** environ;
+
 namespace fs = std::filesystem;
 namespace avatar = SpacemiT::avatar;
 
@@ -40,13 +48,14 @@ struct Arguments {
     std::string persona = "feifan";
     std::string audio;
     std::string output;
-    std::string provider = "spacemit";
+    std::string video;
+    bool make_video = true;
     std::size_t max_frames = 0;
 };
 
 void PrintUsage() {
     std::cout << "Usage: avatar_file_demo [--persona feifan|zihan] [--audio WAV] [--output DIR]\n"
-        "                        [--provider spacemit|cpu] [--max-frames N]\n";
+        "                        [--video MP4 | --no-video] [--max-frames N]\n";
 }
 
 bool ParseArguments(int argc, char** argv, Arguments* args) {
@@ -55,6 +64,10 @@ bool ParseArguments(int argc, char** argv, Arguments* args) {
         if (key == "-h" || key == "--help") {
             PrintUsage();
             return false;
+        }
+        if (key == "--no-video") {
+            args->make_video = false;
+            continue;
         }
         if (i + 1 >= argc) {
             throw std::invalid_argument("Missing value for " + key);
@@ -66,8 +79,8 @@ bool ParseArguments(int argc, char** argv, Arguments* args) {
             args->audio = value;
         } else if (key == "--output") {
             args->output = value;
-        } else if (key == "--provider") {
-            args->provider = value;
+        } else if (key == "--video") {
+            args->video = value;
         } else if (key == "--max-frames") {
             args->max_frames = std::stoul(value);
         } else {
@@ -83,6 +96,12 @@ fs::path CacheRoot() {
         throw std::runtime_error("HOME unset");
     }
     return fs::path(home) / ".cache";
+}
+
+void RequireFile(const fs::path& path, const std::string& hint) {
+    if (!fs::exists(path)) {
+        throw std::runtime_error(path.string() + " not found; " + hint);
+    }
 }
 
 std::vector<std::pair<fs::path, fs::path>> ListFrames(const fs::path& dataset) {
@@ -126,6 +145,31 @@ std::vector<std::vector<float>> ExtractWindows(avatar::FeatherHubertExtractor* e
     return windows;
 }
 
+// Muxes the 25 fps frames with the audio. Returns false when ffmpeg is not installed.
+bool EncodeVideo(const fs::path& frames, const std::string& audio, const fs::path& video) {
+    std::vector<std::string> args = {"ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
+        "-framerate", "25", "-i", (frames / "%08d.png").string(), "-i", audio,
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", video.string()};
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+        argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
+    pid_t pid = 0;
+    const int error = posix_spawnp(&pid, "ffmpeg", nullptr, nullptr, argv.data(), environ);
+    if (error == ENOENT) {
+        return false;
+    }
+    if (error) {
+        throw std::runtime_error(std::string("Cannot start ffmpeg: ") + std::strerror(error));
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        throw std::runtime_error("ffmpeg failed to write " + video.string());
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -137,11 +181,22 @@ int main(int argc, char** argv) {
         const auto cache = CacheRoot();
         const auto models = cache / "models" / "avatar";
         const auto assets = cache / "assets" / "avatar";
+        const auto hubert_model = models / "feather_hubert_dynamic.onnx";
+        const auto unet_model = models / (args.persona + "_int8.onnx");
+        RequireFile(hubert_model, "run ./scripts/download_models.sh --persona " + args.persona);
+        RequireFile(unet_model, "run ./scripts/download_models.sh --persona " + args.persona);
+        RequireFile(assets / args.persona, "run ./scripts/download_assets.sh --persona " + args.persona);
         if (args.audio.empty()) {
             args.audio = (assets / "audio" / (args.persona + "_test.wav")).string();
         }
         if (args.output.empty()) {
-            args.output = args.persona + "-frames";
+            args.output = "output/" + args.persona + "-frames";
+        }
+        if (args.video.empty()) {
+            args.video = (fs::path(args.output).parent_path() / (args.persona + ".mp4")).string();
+        }
+        if (args.make_video && fs::exists(args.video)) {
+            throw std::runtime_error("Video already exists: " + args.video);
         }
         fs::create_directories(args.output);
         if (!fs::is_empty(args.output)) {
@@ -150,14 +205,15 @@ int main(int argc, char** argv) {
 
         avatar::RuntimeOptions hubert_options;  // FeatherHuBERT runs on the CPU.
         avatar::RuntimeOptions unet_options;
-        unet_options.provider = args.provider;
-        avatar::FeatherHubertExtractor hubert((models / "feather_hubert_dynamic.onnx").string(), hubert_options);
-        avatar::UnetLipGenerator unet((models / (args.persona + "_int8.onnx")).string(), unet_options);
+        unet_options.provider = "spacemit";     // Person UNet runs on the SpaceMIT EP.
+        avatar::FeatherHubertExtractor hubert(hubert_model.string(), hubert_options);
+        avatar::UnetLipGenerator unet(unet_model.string(), unet_options);
 
         const auto start = std::chrono::steady_clock::now();
         const auto windows = ExtractWindows(&hubert, avatar::ReadWav16k(args.audio));
         const auto frames = ListFrames(assets / args.persona);
         const auto total = args.max_frames ? std::min(args.max_frames, windows.size()) : windows.size();
+        // Base frames play forward and back: 0, 1, ..., N-1, N-2, ..., 1, 0, ...
         const auto period = frames.size() == 1 ? 1 : 2 * frames.size() - 2;
 
         std::unique_ptr<avatar::PreparedFrame> frame;
@@ -181,6 +237,14 @@ int main(int argc, char** argv) {
         const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         std::cout << total << " frames saved to " << args.output << " in " << std::fixed << std::setprecision(1)
             << seconds << " s (ORT " << avatar::RuntimeVersion() << ")\n";
+
+        if (args.make_video) {
+            if (EncodeVideo(args.output, args.audio, args.video)) {
+                std::cout << "Video saved to " << args.video << "\n";
+            } else {
+                std::cout << "ffmpeg not found; install ffmpeg to also get " << args.video << "\n";
+            }
+        }
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "avatar_file_demo: " << e.what() << '\n';

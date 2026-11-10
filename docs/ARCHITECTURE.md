@@ -8,7 +8,7 @@
 - `src/runtime.cpp`：用ORT C++ API创建会话选项；provider为 `spacemit` 时通过 `SessionOptionsSpaceMITEnvInit` 启用SpaceMIT EP。构建时链接系统 `spacemit-onnxruntime` 的 `libonnxruntime.so` 与 `libspacemit_ep.so`，不复制运行库到源码或wheel；找不到EP时构建仅CPU的库，并拒绝 `spacemit`。
 - `src/image.cpp`：从旧渲染器提取的11段图像函数及拥有输入、缓冲区、逐流状态的新公共封装。配置显式控制native mask、mouth mask、锐化和时间平滑。
 - `src/cli/worker.cpp`：原生extract/render工具。render按预取（解码、模型输入）、UNet推理、按帧序贴回、多线程写PNG四段流水线并行；贴回在同一份后处理状态上按帧序进行，输出与串行逐帧一致。无MPP/播放器/网络服务依赖。
-- `examples/avatar_file_demo.cpp`：只用公共API逐帧串行渲染的C++示例，输出与worker逐字节一致。
+- `examples/avatar_file_demo.cpp`：只用公共API逐帧串行渲染的C++示例，输出与worker逐字节一致，渲染后调用ffmpeg合成带音频的mp4；`python/examples/avatar_file_demo.py` 通过 `AvatarService` 完成同样流程。
 - `python/avatar_bindings.cpp`：仅做dtype/shape、所有权、GIL和接口转换。
 - `python/spacemit_avatar/pipeline.py`：两个原生子进程的离线编排、取消和超时；没有第二套Python模型算法。
 
