@@ -19,7 +19,7 @@
   "ai_sdk_reference": "5a851083e1d9b0f6ad05fefd65e92511cd9c2178",
   "license_status": "Extracted code is released under Apache-2.0 in this component. Model weight redistribution terms are recorded separately. The submitter confirmed the current portrait assets need no separate permission for the planned Model Zoo submission on 2026-11-06.",
   "derivation_notes": [
-    "Image functions preserve original math; one unused local annotated maybe_unused, and one createImageInput comment drops the retired product name. Public wrapper adds validation, ownership, and per-instance non-reentrancy.",
+    "Image functions preserve original math; one unused local annotated maybe_unused, one createImageInput comment drops the retired product name, and two continuation lines in createOutputFace are re-indented to a multiple of 4 spaces for the shared cpplint rule. Public wrapper adds validation, ownership, and per-instance non-reentrancy.",
     "FeatureStream migrated from feature_reference.py with float32-normalized PCM and fixed 1.25s/1e-3 baseline; final padding belongs only to CLI timeline."
   ],
   "feature_source": {
