@@ -37,7 +37,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libopencv-core-dev libopencv-imgproc-dev libopencv-imgcodecs-dev \
             libyaml-cpp-dev python3-dev python3-yaml pybind11-dev
-      - name: Prepare ONNX Runtime headers
+      - name: Prepare ONNX Runtime
         working-directory: ${{ runner.temp }}
         run: |
           curl --fail --silent --show-error --location --retry 3 \
@@ -47,4 +47,6 @@ jobs:
           tar -xzf "$ORT_ARCHIVE"
           printf 'ONNXRUNTIME_INCLUDE_DIR=%s/%s/include\n' "$PWD" "${ORT_ARCHIVE%.tgz}" >> "$GITHUB_ENV"
       - run: bash tests/run_sdk_test.sh core
+      - run: bash tests/run_sdk_test.sh config
+      - run: bash tests/run_sdk_test.sh invalid-input
       - run: bash tests/run_sdk_test.sh installed
