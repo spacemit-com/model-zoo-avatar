@@ -18,17 +18,23 @@ COMPONENT = Path(__file__).resolve().parents[2]
 
 
 def encode_video(frames, audio, video):
-    """Mux the frames with the audio. Returns False when ffmpeg is not installed."""
+    """Mux the frames with the audio on the K3 hardware encoder (h264_stcodec) when
+    ffmpeg has it, and with libx264 otherwise. Returns the encoder used, or None
+    when ffmpeg is not installed."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
-        return False
-    subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-framerate", "25",
-         "-i", str(Path(frames) / "%08d.png"), "-i", str(audio),
-         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(video)],
-        check=True,
-    )  # fmt: skip
-    return True
+        return None
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-framerate", "25",
+               "-i", str(Path(frames) / "%08d.png"), "-i", str(audio)]  # fmt: skip
+    output = ["-c:a", "aac", "-shortest", str(video)]
+    # The hardware encoder logs even at -loglevel error, so its output is captured.
+    hardware = command + ["-c:v", "h264_stcodec", "-pix_fmt", "nv12"] + output
+    if subprocess.run(hardware, capture_output=True).returncode == 0:
+        return "h264_stcodec"
+    Path(video).unlink(missing_ok=True)
+    software = command + ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"] + output
+    subprocess.run(software, stdout=subprocess.DEVNULL, check=True)
+    return "libx264"
 
 
 def main():
@@ -55,8 +61,9 @@ def main():
     print(f"{result.frames} frames saved to {output}")
     if args.no_video:
         return
-    if encode_video(output, audio, video):
-        print(f"Video saved to {video}")
+    encoder = encode_video(output, audio, video)
+    if encoder:
+        print(f"Video saved to {video} ({encoder})")
     else:
         print(f"ffmpeg not found; install ffmpeg to also get {video}")
 

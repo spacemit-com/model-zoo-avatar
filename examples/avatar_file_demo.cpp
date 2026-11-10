@@ -17,6 +17,7 @@
  * frames with a pipeline.
  */
 
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <opencv2/imgcodecs.hpp>
@@ -146,28 +147,61 @@ std::vector<std::vector<float>> ExtractWindows(avatar::FeatherHubertExtractor* e
 }
 
 // Muxes the 25 fps frames with the audio. Returns false when ffmpeg is not installed.
-bool EncodeVideo(const fs::path& frames, const std::string& audio, const fs::path& video) {
-    std::vector<std::string> args = {"ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
-        "-framerate", "25", "-i", (frames / "%08d.png").string(), "-i", audio,
-        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", video.string()};
+// Runs ffmpeg with stdout on /dev/null and returns its exit status, or -1 when ffmpeg is not
+// installed. quiet also drops stderr: the hardware encoder logs there even at
+// -loglevel error.
+int RunFfmpeg(std::vector<std::string> args, bool quiet) {
     std::vector<char*> argv;
     for (auto& arg : args) {
         argv.push_back(arg.data());
     }
     argv.push_back(nullptr);
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    if (quiet) {
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    }
     pid_t pid = 0;
-    const int error = posix_spawnp(&pid, "ffmpeg", nullptr, nullptr, argv.data(), environ);
+    const int error = posix_spawnp(&pid, "ffmpeg", &actions, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
     if (error == ENOENT) {
-        return false;
+        return -1;
     }
     if (error) {
         throw std::runtime_error(std::string("Cannot start ffmpeg: ") + std::strerror(error));
     }
     int status = 0;
-    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status)) {
+        throw std::runtime_error("ffmpeg did not finish");
+    }
+    return WEXITSTATUS(status);
+}
+
+// Muxes the 25 fps frames with the audio, on the K3 hardware encoder
+// (h264_stcodec) when ffmpeg has it and with libx264 otherwise. Returns the
+// encoder used, or an empty string when ffmpeg is not installed.
+std::string EncodeVideo(const fs::path& frames, const std::string& audio, const fs::path& video) {
+    const auto command = [&](std::vector<std::string> codec) {
+        std::vector<std::string> args = {"ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
+            "-framerate", "25", "-i", (frames / "%08d.png").string(), "-i", audio};
+        args.insert(args.end(), codec.begin(), codec.end());
+        args.insert(args.end(), {"-c:a", "aac", "-shortest", video.string()});
+        return args;
+    };
+    const int hardware = RunFfmpeg(command({"-c:v", "h264_stcodec", "-pix_fmt", "nv12"}), true);
+    if (hardware < 0) {
+        return "";
+    }
+    if (hardware == 0) {
+        return "h264_stcodec";
+    }
+    std::error_code ignored;
+    fs::remove(video, ignored);  // main() checked that the video did not exist before
+    if (RunFfmpeg(command({"-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"}), false) != 0) {
         throw std::runtime_error("ffmpeg failed to write " + video.string());
     }
-    return true;
+    return "libx264";
 }
 
 }  // namespace
@@ -239,8 +273,9 @@ int main(int argc, char** argv) {
             << seconds << " s (ORT " << avatar::RuntimeVersion() << ")\n";
 
         if (args.make_video) {
-            if (EncodeVideo(args.output, args.audio, args.video)) {
-                std::cout << "Video saved to " << args.video << "\n";
+            const auto encoder = EncodeVideo(args.output, args.audio, args.video);
+            if (!encoder.empty()) {
+                std::cout << "Video saved to " << args.video << " (" << encoder << ")\n";
             } else {
                 std::cout << "ffmpeg not found; install ffmpeg to also get " << args.video << "\n";
             }
