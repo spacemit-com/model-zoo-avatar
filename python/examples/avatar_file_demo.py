@@ -25,7 +25,7 @@ def encode_video(frames, audio, video):
     subprocess.run(
         [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-framerate", "25",
          "-i", str(Path(frames) / "%08d.png"), "-i", str(audio),
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(video)],
+         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(video)],
         check=True,
     )  # fmt: skip
     return True

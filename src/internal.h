@@ -59,10 +59,12 @@ public:
     explicit FeatureReader(const std::string& path);
     bool Next(std::vector<float>& window);
     std::uint64_t Count() const { return count_; }
+    std::uint64_t Samples() const { return samples_; }  // PCM samples the windows cover
 
 private:
     std::ifstream stream_;
     std::uint64_t count_ = 0;
+    std::uint64_t samples_ = 0;
     std::uint64_t read_ = 0;
 };
 

@@ -167,7 +167,8 @@ void CoreContract() {
     {
         avatar::detail::FeatureReader reader(file.string());
         std::vector<float> window;
-        Require(reader.Count() == 1 && reader.Next(window) && window.size() == avatar::kWindowElements &&
+        Require(reader.Count() == 1 && reader.Samples() == 640 && reader.Next(window) &&
+            window.size() == avatar::kWindowElements &&
             window[0] == 0.25f && !reader.Next(window), "Feature file roundtrip failed");
     }
     fs::remove_all(temp);

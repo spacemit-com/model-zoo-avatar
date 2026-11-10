@@ -149,7 +149,7 @@ std::vector<std::vector<float>> ExtractWindows(avatar::FeatherHubertExtractor* e
 bool EncodeVideo(const fs::path& frames, const std::string& audio, const fs::path& video) {
     std::vector<std::string> args = {"ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
         "-framerate", "25", "-i", (frames / "%08d.png").string(), "-i", audio,
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", video.string()};
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", video.string()};
     std::vector<char*> argv;
     for (auto& arg : args) {
         argv.push_back(arg.data());

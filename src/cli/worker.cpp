@@ -6,23 +6,32 @@
 /*
  * avatar_worker: offline two-stage rendering.
  *   extract  WAV -> FTF1 feature file (FeatherHuBERT)
- *   render   FTF1 -> PNG frames (person UNet, pipelined)
+ *   render   FTF1 -> PNG frames, or an MP4 encoded by ffmpeg (person UNet, pipelined)
+ * Each stage prints a performance report on stderr and a JSON result line on stdout.
  */
 
 #include <fcntl.h>
 #include <sched.h>
+#include <spawn.h>
 #include <sys/file.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
+#include <cerrno>
 #include <charconv>
+#include <cinttypes>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <exception>
 #include <filesystem>  // NOLINT(build/c++17)
@@ -40,10 +49,16 @@
 #include "avatar_service.h"
 #include "internal.h"
 
+extern char** environ;
+
 namespace fs = std::filesystem;
 namespace avatar = SpacemiT::avatar;
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+constexpr double kFps = 25.0;
+constexpr double kSampleRate = 16000.0;
 
 volatile std::sig_atomic_t stopped = 0;
 
@@ -55,6 +70,32 @@ void CheckCancel() {
     if (stopped) {
         throw std::runtime_error("Worker cancelled; inference returned before releasing resources");
     }
+}
+
+double Seconds(Clock::duration duration) {
+    return std::chrono::duration<double>(duration).count();
+}
+
+struct Arguments {
+    std::string mode;
+    std::string config;
+    std::string audio;
+    std::string features;
+    std::string output;
+    std::uint64_t max_frames = 0;
+};
+
+// Frame count, elapsed time and further JSON members of the result line.
+struct Outcome {
+    std::uint64_t frames = 0;
+    double elapsed_ms = 0;
+    std::string json;
+};
+
+std::string Number(double value) {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3) << value;
+    return out.str();
 }
 
 class OutputDirectory {
@@ -150,16 +191,214 @@ struct ComposedFrame {
 
 using FramePaths = std::vector<std::pair<fs::path, fs::path>>;
 
-// Keeps the EP busy while X100 threads decode, composite and encode the
+// Busy time of one pipeline stage, summed over frames and threads.
+class StageTimer {
+public:
+    template <class Work>
+    void Measure(Work&& work) {
+        const auto start = Clock::now();
+        work();
+        nanoseconds_ += std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
+    }
+    double MillisecondsPerFrame(std::uint64_t frames) const {
+        return frames ? static_cast<double>(nanoseconds_) / 1e6 / static_cast<double>(frames) : 0.0;
+    }
+
+private:
+    std::atomic<std::int64_t> nanoseconds_{0};
+};
+
+struct RenderStats {
+    StageTimer decode, landmarks, preprocess, unet, compose, write;
+    Clock::time_point start;
+    std::vector<Clock::time_point> done;  // when the sink took each frame
+};
+
+// Destination of composed frames, fed by Threads() writer threads.
+class FrameSink {
+public:
+    virtual ~FrameSink() = default;
+    virtual std::size_t Threads() const = 0;
+    virtual const char* WriteLabel() const = 0;
+    virtual void Write(const ComposedFrame& frame) = 0;
+    virtual void Finish() {}
+};
+
+// Numbered PNG frames in an empty, locked directory.
+class PngSink : public FrameSink {
+public:
+    explicit PngSink(const fs::path& directory) : directory_(directory), lock_(directory) {}
+    std::size_t Threads() const override { return 3; }
+    const char* WriteLabel() const override { return "PNG"; }
+    void Write(const ComposedFrame& frame) override {
+        std::ostringstream name;
+        name << std::setw(8) << std::setfill('0') << frame.index << ".png";
+        if (!cv::imwrite((directory_ / name.str()).string(), frame.image)) {
+            throw std::runtime_error("Image write failed");
+        }
+    }
+
+private:
+    fs::path directory_;
+    OutputDirectory lock_;
+};
+
+// Streams raw BGR frames to ffmpeg, which encodes H.264 and adds the audio.
+// libx264 "veryfast" encodes about 58 fps of 1280x720 on the K3 X100 cores, so
+// the UNet stays the bottleneck. The video gets its final name only after
+// ffmpeg succeeds; a failed or cancelled render leaves no partial file.
+class Mp4Sink : public FrameSink {
+public:
+    Mp4Sink(fs::path video, std::string audio, std::string ffmpeg)
+        : video_(std::move(video)), audio_(std::move(audio)), ffmpeg_(std::move(ffmpeg)),
+        partial_(video_.string() + "." + std::to_string(getpid()) + ".part") {}
+    ~Mp4Sink() override { Stop(); }
+    Mp4Sink(const Mp4Sink&) = delete;
+    Mp4Sink& operator=(const Mp4Sink&) = delete;
+
+    std::size_t Threads() const override { return 1; }  // ffmpeg needs the frames in order
+    const char* WriteLabel() const override { return "to ffmpeg"; }
+
+    void Write(const ComposedFrame& frame) override {
+        const cv::Mat image = frame.image.isContinuous() ? frame.image : frame.image.clone();
+        if (pid_ < 0) {
+            Start(image.cols, image.rows);
+        } else if (image.cols != width_ || image.rows != height_) {
+            throw std::runtime_error("Base frames differ in size");
+        }
+        const unsigned char* data = image.data;
+        std::size_t left = image.total() * image.elemSize();
+        while (left) {
+            const auto written = write(input_, data, left);
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+            if (written < 0) {
+                const int error = errno;
+                CheckCancel();
+                if (error == EPIPE) {
+                    throw std::runtime_error("ffmpeg stopped reading frames");
+                }
+                throw std::runtime_error(std::string("Cannot write to ffmpeg: ") + std::strerror(error));
+            }
+            data += written;
+            left -= static_cast<std::size_t>(written);
+        }
+    }
+
+    void Finish() override {
+        close(input_);
+        input_ = -1;
+        const pid_t pid = pid_;
+        pid_ = -1;
+        int status = 0;
+        rusage usage{};
+        if (pid < 0 || wait4(pid, &status, 0, &usage) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            throw std::runtime_error("ffmpeg failed to encode " + video_.string());
+        }
+        cpu_seconds_ = TimevalSeconds(usage.ru_utime) + TimevalSeconds(usage.ru_stime);
+        if (fs::exists(video_)) {
+            throw std::runtime_error("Video already exists: " + video_.string());
+        }
+        fs::rename(partial_, video_);
+        finished_ = true;
+    }
+
+    double EncoderCpuSeconds() const { return cpu_seconds_; }
+
+private:
+    static double TimevalSeconds(const timeval& value) {
+        return static_cast<double>(value.tv_sec) + static_cast<double>(value.tv_usec) / 1e6;
+    }
+
+    void Start(int width, int height) {
+        width_ = width;
+        height_ = height;
+        std::vector<std::string> args = {ffmpeg_, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo",
+            "-pix_fmt", "bgr24", "-s", std::to_string(width) + "x" + std::to_string(height), "-framerate", "25",
+            "-i", "pipe:0"};
+        if (!audio_.empty()) {
+            args.insert(args.end(), {"-i", audio_});
+        }
+        args.insert(args.end(), {"-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"});
+        if (!audio_.empty()) {
+            args.insert(args.end(), {"-c:a", "aac"});
+        }
+        args.insert(args.end(), {"-shortest", "-f", "mp4", partial_});
+        std::vector<char*> argv;
+        for (auto& arg : args) {
+            argv.push_back(arg.data());
+        }
+        argv.push_back(nullptr);
+
+        int fds[2];
+        if (pipe2(fds, O_CLOEXEC) != 0) {
+            throw std::runtime_error(std::string("Cannot create a pipe to ffmpeg: ") + std::strerror(errno));
+        }
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_adddup2(&actions, fds[0], STDIN_FILENO);
+        posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+        // The worker ignores SIGPIPE to report a dead ffmpeg; ffmpeg itself keeps the default.
+        posix_spawnattr_t attributes;
+        posix_spawnattr_init(&attributes);
+        sigset_t defaults;
+        sigemptyset(&defaults);
+        sigaddset(&defaults, SIGPIPE);
+        posix_spawnattr_setsigdefault(&attributes, &defaults);
+        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGDEF);
+        pid_t pid = -1;
+        const int error = posix_spawn(&pid, ffmpeg_.c_str(), &actions, &attributes, argv.data(), environ);
+        posix_spawn_file_actions_destroy(&actions);
+        posix_spawnattr_destroy(&attributes);
+        close(fds[0]);
+        if (error) {
+            close(fds[1]);
+            throw std::runtime_error(std::string("Cannot start ffmpeg: ") + std::strerror(error));
+        }
+        pid_ = pid;
+        input_ = fds[1];
+    }
+
+    // Ends an unfinished ffmpeg and removes its partial video.
+    void Stop() noexcept {
+        if (input_ >= 0) {
+            close(input_);
+            input_ = -1;
+        }
+        if (pid_ > 0) {
+            kill(pid_, SIGTERM);
+            waitpid(pid_, nullptr, 0);
+            pid_ = -1;
+        }
+        if (!finished_) {
+            std::error_code ignored;
+            fs::remove(partial_, ignored);
+        }
+    }
+
+    fs::path video_;
+    std::string audio_;
+    std::string ffmpeg_;
+    std::string partial_;
+    int width_ = 0;
+    int height_ = 0;
+    pid_t pid_ = -1;
+    int input_ = -1;
+    bool finished_ = false;
+    double cpu_seconds_ = 0;
+};
+
+// Keeps the EP busy while X100 threads decode, composite and write the
 // neighbouring frames:
-//   prefetch (decode, model input) -> UNet on this thread -> compose -> PNG writers.
+//   prefetch (decode, model input) -> UNet on this thread -> compose -> sink writers.
 // Compose runs in frame order on a single PreparedFrame, whose post-processing
 // state carries across frames exactly as in a serial loop, so the frames are
 // unchanged. Model inputs come from a separate PreparedFrame, which keeps no
 // state that affects them.
 std::uint64_t Render(avatar::UnetLipGenerator& model, avatar::detail::FeatureReader& reader, std::uint64_t total,
-    const FramePaths& frames, const avatar::RenderOptions& options, const fs::path& output) {
-    constexpr std::size_t kDepth = 4, kWriters = 3;
+    const FramePaths& frames, const avatar::RenderOptions& options, FrameSink& sink, RenderStats& stats) {
+    constexpr std::size_t kDepth = 4;
     Channel<SourceFrame> sources(kDepth);
     Channel<GeneratedFrame> generated(kDepth);
     Channel<ComposedFrame> composed(kDepth);
@@ -179,6 +418,8 @@ std::uint64_t Render(avatar::UnetLipGenerator& model, avatar::detail::FeatureRea
         generated.Close();
         composed.Close();
     };
+    stats.start = Clock::now();
+    stats.done.assign(total, stats.start);
     const auto period = frames.size() == 1 ? 1 : 2 * frames.size() - 2;
     std::vector<std::thread> threads;
     threads.emplace_back([&] {
@@ -187,14 +428,17 @@ std::uint64_t Render(avatar::UnetLipGenerator& model, avatar::detail::FeatureRea
             for (std::uint64_t i = 0; i < total && !failed; ++i) {
                 const auto at = i % period;
                 const auto& paths = frames[at < frames.size() ? at : period - at];
-                SourceFrame item{i, cv::imread(paths.first.string(), cv::IMREAD_COLOR),
-                    avatar::ReadLandmarks(paths.second.string()), {}};
-                if (!frame) {
-                    frame = std::make_unique<avatar::PreparedFrame>(item.image, item.landmarks, options);
-                } else {
-                    frame->SetFrame(item.image, item.landmarks, options);
-                }
-                item.input = frame->ImageTensor();
+                SourceFrame item{i, {}, {}, {}};
+                stats.decode.Measure([&] { item.image = cv::imread(paths.first.string(), cv::IMREAD_COLOR); });
+                stats.landmarks.Measure([&] { item.landmarks = avatar::ReadLandmarks(paths.second.string()); });
+                stats.preprocess.Measure([&] {
+                    if (!frame) {
+                        frame = std::make_unique<avatar::PreparedFrame>(item.image, item.landmarks, options);
+                    } else {
+                        frame->SetFrame(item.image, item.landmarks, options);
+                    }
+                    item.input = frame->ImageTensor();
+                });
                 if (!sources.Push(std::move(item))) {
                     return;
                 }
@@ -212,12 +456,16 @@ std::uint64_t Render(avatar::UnetLipGenerator& model, avatar::detail::FeatureRea
                 if (failed) {
                     return;
                 }
-                if (!frame) {
-                    frame = std::make_unique<avatar::PreparedFrame>(item.image, item.landmarks, options);
-                } else {
-                    frame->SetFrame(item.image, item.landmarks, options);
-                }
-                if (!composed.Push({item.index, frame->Compose(item.output)})) {
+                cv::Mat image;
+                stats.compose.Measure([&] {
+                    if (!frame) {
+                        frame = std::make_unique<avatar::PreparedFrame>(item.image, item.landmarks, options);
+                    } else {
+                        frame->SetFrame(item.image, item.landmarks, options);
+                    }
+                    image = frame->Compose(item.output);
+                });
+                if (!composed.Push({item.index, std::move(image)})) {
                     return;
                 }
             }
@@ -226,7 +474,7 @@ std::uint64_t Render(avatar::UnetLipGenerator& model, avatar::detail::FeatureRea
             fail(std::current_exception());
         }
     });
-    for (std::size_t i = 0; i < kWriters; ++i) {
+    for (std::size_t i = 0; i < sink.Threads(); ++i) {
         threads.emplace_back([&] {
             try {
                 ComposedFrame item;
@@ -234,11 +482,8 @@ std::uint64_t Render(avatar::UnetLipGenerator& model, avatar::detail::FeatureRea
                     if (failed) {
                         return;
                     }
-                    std::ostringstream name;
-                    name << std::setw(8) << std::setfill('0') << item.index << ".png";
-                    if (!cv::imwrite((output / name.str()).string(), item.image)) {
-                        throw std::runtime_error("Image write failed");
-                    }
+                    stats.write.Measure([&] { sink.Write(item); });
+                    stats.done[item.index] = Clock::now();
                     ++written;
                 }
             } catch (...) {
@@ -254,7 +499,8 @@ std::uint64_t Render(avatar::UnetLipGenerator& model, avatar::detail::FeatureRea
             if (!reader.Next(window)) {
                 throw std::runtime_error("Feature file ended early");
             }
-            auto face = model.Infer(item.input, window);
+            std::vector<float> face;
+            stats.unet.Measure([&] { face = model.Infer(item.input, window); });
             CheckCancel();
             if (!generated.Push({item.index, std::move(item.image), std::move(item.landmarks), std::move(face)})) {
                 break;
@@ -381,68 +627,276 @@ FramePaths ListFrames(const fs::path& dataset) {
     return frames;
 }
 
-std::uint64_t Extract(const YAML::Node& node, const fs::path& folder, const std::string& audio,
-    const std::string& output) {
-    ApplyAffinity(node);
-    avatar::FeatherHubertExtractor model(ResolvePath(node["model"].as<std::string>(), folder),
-        ReadRuntime(node, folder));
-    auto pcm = avatar::ReadWav16k(audio);
-    avatar::detail::FeatureWriter writer(output);
-    std::uint64_t count = 0;
-    for (std::size_t offset = 0; offset < pcm.size(); offset += 12000) {
-        CheckCancel();
-        const auto size = std::min<std::size_t>(12000, pcm.size() - offset);
-        auto batch = model.PushPcm(pcm.data() + offset, size, offset + size == pcm.size());
-        CheckCancel();
-        count += batch.size();
-        writer.Append(batch);
-    }
-    if (!count) {
-        throw std::runtime_error("Audio is too short to produce feature windows");
-    }
-    // The extractor preserves the original server's model-frame count.
-    // Pad the final video ticks with closed-mouth features to cover the PCM duration.
-    const auto needed = (pcm.size() + 639) / 640;
-    if (count > needed) {
-        throw std::runtime_error("Feature count exceeds audio timeline");
-    }
-    if (count < needed) {
-        avatar::FeatureBatch tail;
-        for (auto i = count; i < needed; ++i) {
-            tail.frame_ids.push_back(static_cast<std::int64_t>(i));
+// Absolute path of an executable found on PATH, or empty.
+std::string FindOnPath(const std::string& name) {
+    const char* path = std::getenv("PATH");
+    std::istringstream directories(path ? path : "");
+    std::string directory;
+    while (std::getline(directories, directory, ':')) {
+        const auto candidate = fs::absolute(fs::path(directory.empty() ? "." : directory) / name);
+        std::error_code error;
+        if (fs::is_regular_file(candidate, error) && access(candidate.c_str(), X_OK) == 0) {
+            return candidate.string();
         }
-        tail.values.resize(tail.size() * avatar::kWindowElements, 0);
-        writer.Append(tail);
-        count = needed;
     }
-    writer.Finish(pcm.size());
-    return count;
+    return {};
 }
 
-std::uint64_t ParseLimit(const std::map<std::string, std::string>& args) {
-    std::uint64_t limit = 0;
-    const auto found = args.find("--max-frames");
-    if (found != args.end()) {
-        const auto& value = found->second;
-        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), limit);
-        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
-            throw std::invalid_argument("max-frames must be nonnegative");
+bool IsVideoPath(const std::string& output) {
+    auto extension = fs::path(output).extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".mp4";
+}
+
+void CreateParent(const std::string& output) {
+    const auto parent = fs::path(output).parent_path();
+    if (!parent.empty()) {
+        fs::create_directories(parent);
+    }
+}
+
+Outcome Extract(const YAML::Node& node, const fs::path& folder, const Arguments& args, Clock::time_point start) {
+    // Read the audio and check the output before loading the model.
+    const auto pcm = avatar::ReadWav16k(args.audio);
+    if (fs::exists(args.output)) {
+        throw std::runtime_error("Feature file already exists: " + args.output);
+    }
+    ApplyAffinity(node);
+    const auto load_start = Clock::now();
+    avatar::FeatherHubertExtractor model(ResolvePath(node["model"].as<std::string>(), folder),
+        ReadRuntime(node, folder));
+    const auto extract_start = Clock::now();
+    CreateParent(args.output);
+    auto writer = std::make_unique<avatar::detail::FeatureWriter>(args.output);
+    std::uint64_t count = 0;
+    try {
+        for (std::size_t offset = 0; offset < pcm.size(); offset += 12000) {
+            CheckCancel();
+            const auto size = std::min<std::size_t>(12000, pcm.size() - offset);
+            auto batch = model.PushPcm(pcm.data() + offset, size, offset + size == pcm.size());
+            CheckCancel();
+            count += batch.size();
+            writer->Append(batch);
         }
+        if (!count) {
+            throw std::runtime_error("Audio is too short to produce feature windows");
+        }
+        // The extractor preserves the original server's model-frame count.
+        // Pad the final video ticks with closed-mouth features to cover the PCM duration.
+        const auto needed = (pcm.size() + 639) / 640;
+        if (count > needed) {
+            throw std::runtime_error("Feature count exceeds audio timeline");
+        }
+        if (count < needed) {
+            avatar::FeatureBatch tail;
+            for (auto i = count; i < needed; ++i) {
+                tail.frame_ids.push_back(static_cast<std::int64_t>(i));
+            }
+            tail.values.resize(tail.size() * avatar::kWindowElements, 0);
+            writer->Append(tail);
+            count = needed;
+        }
+        writer->Finish(pcm.size());
+    } catch (...) {
+        writer.reset();
+        std::error_code ignored;
+        fs::remove(args.output, ignored);  // An incomplete feature file would block the next run.
+        throw;
+    }
+    const auto end = Clock::now();
+    const double audio_s = static_cast<double>(pcm.size()) / kSampleRate;
+    const double load_s = Seconds(extract_start - load_start);
+    const double extract_s = Seconds(end - extract_start);
+    const double total_s = Seconds(end - start);
+    std::fprintf(stderr, "avatar_worker extract: %.2f s of audio -> %" PRIu64 " feature windows -> %s\n", audio_s,
+        count, args.output.c_str());
+    std::fprintf(stderr, "  total      %.2f s  (model load %.2f s, FeatherHuBERT %.2f s), RTF %.3f\n", total_s, load_s,
+        extract_s, extract_s / audio_s);
+    return {count, total_s * 1000,
+        ",\"load_ms\":" + Number(load_s * 1000) + ",\"extract_ms\":" + Number(extract_s * 1000) +
+            ",\"audio_s\":" + Number(audio_s) + ",\"rtf\":" + Number(extract_s / audio_s)};
+}
+
+std::uint64_t ParseLimit(const std::string& value) {
+    std::uint64_t limit = 0;
+    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), limit);
+    if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+        throw std::invalid_argument("max-frames must be nonnegative");
     }
     return limit;
 }
 
-std::uint64_t RenderFrames(const YAML::Node& config, const fs::path& folder, const std::string& features,
-    const std::string& output, std::uint64_t limit) {
-    const auto node = config["unet"];
-    ApplyAffinity(node);
-    avatar::UnetLipGenerator model(ResolvePath(node["model"].as<std::string>(), folder), ReadRuntime(node, folder));
+struct RenderSummary {
+    std::uint64_t frames = 0;
+    bool video = false;
+    double load_s = 0, render_s = 0, finish_s = 0, total_s = 0, encoder_cpu_s = 0;
+    double fps = 0, steady_fps = 0, rtf = 0;
+    double decode = 0, landmarks = 0, preprocess = 0, unet = 0, compose = 0, write = 0;  // ms per frame
+    std::string bottleneck;
+    double bottleneck_fps = 0;
+};
+
+RenderSummary Summarize(const RenderStats& stats, const FrameSink& sink, std::uint64_t frames) {
+    RenderSummary s;
+    s.frames = frames;
+    s.decode = stats.decode.MillisecondsPerFrame(frames);
+    s.landmarks = stats.landmarks.MillisecondsPerFrame(frames);
+    s.preprocess = stats.preprocess.MillisecondsPerFrame(frames);
+    s.unet = stats.unet.MillisecondsPerFrame(frames);
+    s.compose = stats.compose.MillisecondsPerFrame(frames);
+    s.write = stats.write.MillisecondsPerFrame(frames);
+    const auto [first, last] = std::minmax_element(stats.done.begin(), stats.done.end());
+    s.steady_fps = frames > 1 ? static_cast<double>(frames - 1) / Seconds(*last - *first) : 0.0;
+    // Throughput each stage could sustain on its own threads; the lowest one limits the render.
+    const auto rate = [](double ms, std::size_t threads) { return ms > 0 ? 1000.0 * threads / ms : 1e9; };
+    const std::vector<std::pair<std::string, double>> limits = {
+        {"prefetch (decode + landmarks + preprocess)", rate(s.decode + s.landmarks + s.preprocess, 1)},
+        {"UNet", rate(s.unet, 1)},
+        {"compose", rate(s.compose, 1)},
+        {sink.WriteLabel(), rate(s.write, sink.Threads())},
+    };
+    const auto slowest = std::min_element(limits.begin(), limits.end(),
+        [](const auto& a, const auto& b) { return a.second < b.second; });
+    s.bottleneck = slowest->first;
+    s.bottleneck_fps = slowest->second;
+    return s;
+}
+
+void PrintRenderReport(const RenderSummary& s, const FrameSink& sink, const Arguments& args) {
+    std::fprintf(stderr, "avatar_worker render: %" PRIu64 " frames, %.2f s of video -> %s\n", s.frames,
+        static_cast<double>(s.frames) / kFps, args.output.c_str());
+    if (s.video) {
+        std::fprintf(stderr, "  total      %.2f s  (model load %.2f s, render %.2f s, ffmpeg finish %.2f s)\n",
+            s.total_s, s.load_s, s.render_s, s.finish_s);
+    } else {
+        std::fprintf(stderr, "  total      %.2f s  (model load %.2f s, render %.2f s)\n", s.total_s, s.load_s,
+            s.render_s + s.finish_s);
+    }
+    std::fprintf(stderr, "  speed      %.1f fps, steady %.1f fps, RTF %.3f (model load excluded)\n", s.fps,
+        s.steady_fps, s.rtf);
+    std::fprintf(stderr,
+        "  per frame  decode %.1f | landmarks %.1f | preprocess %.1f | UNet %.1f | compose %.1f | %s %.1f ms\n",
+        s.decode, s.landmarks, s.preprocess, s.unet, s.compose, sink.WriteLabel(), s.write);
+    if (s.video) {
+        std::fprintf(stderr, "  encoder    ffmpeg libx264 veryfast, %.1f ms CPU per frame%s\n",
+            s.encoder_cpu_s * 1000 / static_cast<double>(s.frames), args.audio.empty() ? ", no audio track" : "");
+    }
+    std::fprintf(stderr, "  bottleneck %s, at most %.1f fps\n", s.bottleneck.c_str(), s.bottleneck_fps);
+}
+
+std::string RenderJson(const RenderSummary& s) {
+    std::string json = ",\"load_ms\":" + Number(s.load_s * 1000) + ",\"render_ms\":" + Number(s.render_s * 1000) +
+        ",\"finish_ms\":" + Number(s.finish_s * 1000) + ",\"fps\":" + Number(s.fps) +
+        ",\"steady_fps\":" + Number(s.steady_fps) + ",\"rtf\":" + Number(s.rtf) +
+        ",\"stage_ms\":{\"decode\":" + Number(s.decode) + ",\"landmarks\":" + Number(s.landmarks) +
+        ",\"preprocess\":" + Number(s.preprocess) + ",\"unet\":" + Number(s.unet) +
+        ",\"compose\":" + Number(s.compose) + ",\"write\":" + Number(s.write) + "}";
+    if (s.video) {
+        json += ",\"encoder_cpu_ms\":" + Number(s.encoder_cpu_s * 1000 / static_cast<double>(s.frames));
+    }
+    return json;
+}
+
+Outcome RenderFrames(const YAML::Node& config, const fs::path& folder, const Arguments& args, Clock::time_point start) {
+    // Check every input before loading the model: mistakes fail fast and leave no output behind.
+    const bool video = IsVideoPath(args.output);
+    if (!video && !args.audio.empty()) {
+        throw std::invalid_argument("--audio is only used with an .mp4 output");
+    }
+    std::string ffmpeg;
+    if (video) {
+        if (fs::exists(args.output)) {
+            throw std::runtime_error("Video already exists: " + args.output);
+        }
+        ffmpeg = FindOnPath("ffmpeg");
+        if (ffmpeg.empty()) {
+            throw std::runtime_error(
+                "ffmpeg not found; install it (sudo apt install ffmpeg) or pass --output DIR for PNG frames");
+        }
+    } else if (fs::exists(args.output) && (!fs::is_directory(args.output) || !fs::is_empty(args.output))) {
+        throw std::runtime_error("Output directory must be empty: " + args.output);
+    }
+    if (!fs::is_regular_file(args.features)) {
+        throw std::runtime_error("Feature file not found: " + args.features + "; run avatar_worker extract first");
+    }
+    avatar::detail::FeatureReader reader(args.features);
+    if (!args.audio.empty()) {
+        const auto samples = avatar::ReadWav16k(args.audio).size();
+        if (samples != reader.Samples()) {
+            throw std::runtime_error("Audio does not match the features: " + args.audio + " has " +
+                std::to_string(samples) + " samples, the features cover " + std::to_string(reader.Samples()));
+        }
+    }
     const auto frames = ListFrames(fs::path(ResolvePath(config["assets"]["person"].as<std::string>(), folder)));
     const auto options = ReadRender(config["render"]);
-    const OutputDirectory output_directory(output);
-    avatar::detail::FeatureReader reader(features);
-    const auto total = limit ? std::min<std::uint64_t>(limit, reader.Count()) : reader.Count();
-    return Render(model, reader, total, frames, options, fs::path(output));
+    const auto total = args.max_frames ? std::min<std::uint64_t>(args.max_frames, reader.Count()) : reader.Count();
+    if (!total) {
+        throw std::runtime_error("Feature file has no windows: " + args.features);
+    }
+
+    const auto node = config["unet"];
+    ApplyAffinity(node);
+    const auto load_start = Clock::now();
+    avatar::UnetLipGenerator model(ResolvePath(node["model"].as<std::string>(), folder), ReadRuntime(node, folder));
+    const double load_s = Seconds(Clock::now() - load_start);
+
+    std::unique_ptr<FrameSink> sink;
+    Mp4Sink* encoder = nullptr;
+    if (video) {
+        CreateParent(args.output);
+        auto mp4 = std::make_unique<Mp4Sink>(args.output, args.audio, ffmpeg);
+        encoder = mp4.get();
+        sink = std::move(mp4);
+    } else {
+        sink = std::make_unique<PngSink>(args.output);
+    }
+    RenderStats stats;
+    const auto count = Render(model, reader, total, frames, options, *sink, stats);
+    const auto finish_start = Clock::now();
+    sink->Finish();
+    const auto end = Clock::now();
+
+    auto summary = Summarize(stats, *sink, count);
+    summary.video = video;
+    summary.load_s = load_s;
+    summary.render_s = Seconds(finish_start - stats.start);
+    summary.finish_s = Seconds(end - finish_start);
+    summary.total_s = Seconds(end - start);
+    summary.encoder_cpu_s = encoder ? encoder->EncoderCpuSeconds() : 0.0;
+    const double busy_s = summary.render_s + summary.finish_s;
+    summary.fps = static_cast<double>(count) / busy_s;
+    summary.rtf = busy_s * kFps / static_cast<double>(count);
+    PrintRenderReport(summary, *sink, args);
+    return {count, summary.total_s * 1000, RenderJson(summary)};
+}
+
+Arguments ParseArguments(int argc, char** argv) {
+    Arguments args;
+    args.mode = argv[1];
+    std::map<std::string, std::string*> fields = {{"--config", &args.config}, {"--audio", &args.audio},
+        {"--features", &args.features}, {"--output", &args.output}};
+    std::string limit;
+    for (int i = 2; i < argc; i += 2) {
+        if (i + 1 >= argc) {
+            throw std::invalid_argument("Missing option value");
+        }
+        const std::string key = argv[i];
+        if (key == "--max-frames") {
+            limit = argv[i + 1];
+        } else if (fields.count(key)) {
+            *fields.at(key) = argv[i + 1];
+        } else {
+            throw std::invalid_argument("Unknown option");
+        }
+    }
+    if (args.config.empty() || args.output.empty()) {
+        throw std::invalid_argument("config and output required");
+    }
+    if (!limit.empty()) {
+        args.max_frames = ParseLimit(limit);
+    }
+    return args;
 }
 
 }  // namespace
@@ -450,51 +904,38 @@ std::uint64_t RenderFrames(const YAML::Node& config, const fs::path& folder, con
 int main(int argc, char** argv) {
     std::signal(SIGTERM, OnSignal);
     std::signal(SIGINT, OnSignal);
+    std::signal(SIGPIPE, SIG_IGN);  // A dead ffmpeg surfaces as EPIPE instead of killing the worker.
+    if (argc < 2) {
+        std::cerr << "Usage: avatar_worker extract --config FILE --audio WAV --output FEATURES.ftf\n"
+            "       avatar_worker render --config FILE --features FEATURES.ftf --output DIR|VIDEO.mp4\n"
+            "                            [--audio WAV] [--max-frames N]\n";
+        return 2;
+    }
     try {
-        if (argc < 2) {
-            throw std::invalid_argument(
-                "Usage: avatar_worker extract|render --config FILE --audio WAV --features FTF --output PATH "
-                "[--max-frames N]");
-        }
-        const std::string mode = argv[1];
-        std::map<std::string, std::string> args;
-        for (int i = 2; i < argc; i += 2) {
-            if (i + 1 >= argc) {
-                throw std::invalid_argument("Missing option value");
-            }
-            const std::string key = argv[i];
-            if (key != "--config" && key != "--audio" && key != "--features" && key != "--output" &&
-                key != "--max-frames") {
-                throw std::invalid_argument("Unknown option");
-            }
-            args[key] = argv[i + 1];
-        }
-        if (!args.count("--config") || !args.count("--output")) {
-            throw std::invalid_argument("config and output required");
-        }
-        const auto file = fs::absolute(args.at("--config"));
+        const auto args = ParseArguments(argc, argv);
+        const auto file = fs::absolute(args.config);
         const auto folder = file.parent_path();
         const auto config = YAML::LoadFile(file.string());
         if (!config["schema"] || config["schema"].as<int>() != 1) {
             throw std::runtime_error("Expected config schema=1");
         }
-        const auto start = std::chrono::steady_clock::now();
-        std::uint64_t count = 0;
-        if (mode == "extract") {
-            if (!args.count("--audio")) {
+        const auto start = Clock::now();
+        Outcome outcome;
+        if (args.mode == "extract") {
+            if (args.audio.empty()) {
                 throw std::invalid_argument("audio required");
             }
-            count = Extract(config["hubert"], folder, args.at("--audio"), args.at("--output"));
-        } else if (mode == "render") {
-            if (!args.count("--features")) {
+            outcome = Extract(config["hubert"], folder, args, start);
+        } else if (args.mode == "render") {
+            if (args.features.empty()) {
                 throw std::invalid_argument("features required");
             }
-            count = RenderFrames(config, folder, args.at("--features"), args.at("--output"), ParseLimit(args));
+            outcome = RenderFrames(config, folder, args, start);
         } else {
             throw std::invalid_argument("Unknown mode");
         }
-        const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-        std::cout << "{\"ok\":true,\"frames\":" << count << ",\"elapsed_ms\":" << ms << "}\n";
+        std::cout << "{\"ok\":true,\"frames\":" << outcome.frames << ",\"elapsed_ms\":" << Number(outcome.elapsed_ms)
+            << outcome.json << "}\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "avatar_worker: " << e.what() << '\n';
