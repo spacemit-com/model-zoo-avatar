@@ -44,6 +44,6 @@ EP 验证加 `--provider spacemit --profile output/unet-profile`，再用 `pytho
 
 改动渲染流程或前后处理时，用改动前后的 `avatar_worker` 对同一特征文件渲染，逐帧比较 PNG 的哈希；`avatar_file_demo` 的输出也应与 worker 的前若干帧逐字节一致。2026-11-10 在 66 板上，两个人物的特征文件与全部帧（feifan 225 帧、zihan 140 帧）均与改动前构建逐字节一致。
 
-输出 mp4 时送入 ffmpeg 的帧与 PNG 模式相同，编码有损，不能逐字节比较：用 `ffmpeg -i <视频> -framerate 25 -i <PNG目录>/%08d.png -lavfi "[0:v][1:v]psnr" -f null -` 对比，2026-11-10 在 66 板上 feifan 平均 PSNR 为 46.5 dB。另需确认视频帧数、25 fps 与音频时长一致（`ffprobe -show_entries stream=nb_frames -show_entries format=duration`）。
+输出 mp4 时送入 ffmpeg 的帧与 PNG 模式相同，编码有损，不能逐字节比较：用 `ffmpeg -i <视频> -framerate 25 -i <PNG目录>/%08d.png -lavfi "[0:v][1:v]psnr" -f null -` 对比，2026-11-10 在 66 板上 feifan 平均 PSNR 为 45.9 dB（硬件编码 h264_stcodec；软件编码 libx264 veryfast 为 46.5 dB）。另需确认视频帧数、25 fps 与音频时长一致（`ffprobe -show_entries stream=nb_frames -show_entries format=duration`）。
 
 实例不允许并发操作，final 后必须 reset；输出数组拥有独立存储。完整文件示例默认离线两阶段，渲染耗时包含写 PNG，不等同于纯模型延迟。

@@ -7,7 +7,7 @@
 - `src/models.cpp`：两张ONNX图的执行、类型/shape及非有限值检查。
 - `src/runtime.cpp`：用ORT C++ API创建会话选项；provider为 `spacemit` 时通过 `SessionOptionsSpaceMITEnvInit` 启用SpaceMIT EP。构建时链接系统 `spacemit-onnxruntime` 的 `libonnxruntime.so` 与 `libspacemit_ep.so`，不复制运行库到源码或wheel；找不到EP时构建仅CPU的库，并拒绝 `spacemit`。
 - `src/image.cpp`：从旧渲染器提取的11段图像函数及拥有输入、缓冲区、逐流状态的新公共封装。配置显式控制native mask、mouth mask、锐化和时间平滑。
-- `src/cli/worker.cpp`：原生extract/render工具。render按预取（解码、模型输入）、UNet推理、按帧序贴回、写出四段流水线并行：输出目录时多线程写PNG，输出mp4时按帧序把原始BGR帧经管道送入ffmpeg（libx264），成功后才改为最终文件名；各阶段计时，结束时打印性能报告与瓶颈；贴回在同一份后处理状态上按帧序进行，输出与串行逐帧一致。无MPP/播放器/网络服务依赖。
+- `src/cli/worker.cpp`：原生extract/render工具。render按预取（解码、模型输入）、UNet推理、按帧序贴回、写出四段流水线并行：输出目录时多线程写PNG，输出mp4时按帧序经管道送入ffmpeg：K3上先用OpenCV转成I420，交给视频硬件编码器h264_stcodec；试编码一帧失败时改为送BGR帧给libx264 veryfast；成功后才改为最终文件名；各阶段计时，结束时打印性能报告与瓶颈；贴回在同一份后处理状态上按帧序进行，输出与串行逐帧一致。不直接链接MPP，也不依赖播放器或网络服务。
 - `examples/avatar_file_demo.cpp`：只用公共API逐帧串行渲染的C++示例，输出与worker逐字节一致，渲染后调用ffmpeg合成带音频的mp4；`python/examples/avatar_file_demo.py` 通过 `AvatarService` 完成同样流程。
 - `python/avatar_bindings.cpp`：仅做dtype/shape、所有权、GIL和接口转换。
 - `python/spacemit_avatar/pipeline.py`：两个原生子进程的离线编排、取消和超时；没有第二套Python模型算法。
