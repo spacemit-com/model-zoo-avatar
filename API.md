@@ -25,13 +25,10 @@ constexpr std::size_t kWindowElements = 16 * 32 * 32;
 // =============================================================================
 
 struct RuntimeOptions {
-    std::string ort_library = "libonnxruntime.so";  // ONNX Runtime 库（同一进程只能加载一套）
-    std::string provider = "cpu";                   // "cpu" 或 "spacemit"；FeatherHuBERT 仅支持 "cpu"
-    std::string ep_library = "libspacemit_ep.so";   // SpaceMIT EP 库
-    std::string ep_affinity;                        // EP 绑核；系统 EP 2.0.8 不生效
-    std::string profile_prefix;                     // 非空时输出 ORT profile
-    int threads = 4;                                // ORT 线程数；EP 模式下为 CPU 回退线程数
-    int ep_threads = 2;                             // EP 计算线程数
+    std::string provider = "cpu";   // "cpu" 或 "spacemit"；FeatherHuBERT 仅支持 "cpu"
+    std::string profile_prefix;     // 非空时输出 ORT profile
+    int threads = 4;                // ORT 线程数；EP 模式下为 CPU 回退线程数
+    int ep_threads = 2;             // EP 计算线程数
 };
 
 // =============================================================================
@@ -50,7 +47,7 @@ struct FeatureBatch {
 
 class FeatherHubertExtractor {
 public:
-    FeatherHubertExtractor(const std::string& model, const RuntimeOptions& options = {});
+    explicit FeatherHubertExtractor(const std::string& model, const RuntimeOptions& options = {});
 
     // 输入 16 kHz 单声道 PCM16；final=true 时输出保留的尾部帧。
     // 每 640 个样本对应 1 帧（25 fps）。final 之后须 Reset() 才能继续输入。
@@ -64,7 +61,7 @@ public:
 
 class UnetLipGenerator {
 public:
-    UnetLipGenerator(const std::string& model, const RuntimeOptions& options = {});
+    explicit UnetLipGenerator(const std::string& model, const RuntimeOptions& options = {});
 
     // image: [1,6,160,160]（PreparedFrame::ImageTensor），audio: [1,16,32,32]（一个特征窗口）
     // 返回 [1,3,160,160]；输出非有限值时抛出异常
@@ -109,7 +106,7 @@ public:
 
 std::vector<cv::Point2f> ReadLandmarks(const std::string& path);  // 读取 .lms
 std::vector<std::int16_t> ReadWav16k(const std::string& path);     // 读取 16 kHz 单声道 PCM16 WAV
-std::string RuntimeVersion();                                      // 已加载的 ORT 版本
+std::string RuntimeVersion();                                      // 链接的 ORT 版本
 
 }  // namespace SpacemiT::avatar
 ```
@@ -146,7 +143,9 @@ int main() {
 }
 ```
 
-示例固定使用一张底帧并串行执行；`avatar_worker` 会按帧轮换底帧、流水线并行处理，并在结尾补齐静音特征。
+示例固定使用一张底帧并串行执行。`examples/avatar_file_demo.cpp` 按帧轮换底帧并补齐结尾的静音特征，输出与 `avatar_worker` 逐字节一致；`avatar_worker` 另外把解码、推理、贴回与写 PNG 流水线并行。
+
+链接：`libavatar.a` 为静态库，应用还需链接 OpenCV（core、imgproc、imgcodecs）、`libonnxruntime.so` 与 `libspacemit_ep.so`；通过 CMake `add_subdirectory` 引入时这些依赖随 `avatar` 目标传递。
 
 ---
 
@@ -189,8 +188,7 @@ class RenderResult:
 # RuntimeOptions / RenderOptions - 字段与 C++ 同名
 # =============================================================================
 
-options = RuntimeOptions()       # ort_library, provider, ep_library, ep_affinity,
-                                 # profile_prefix, threads, ep_threads
+options = RuntimeOptions()       # provider, profile_prefix, threads, ep_threads
 render = RenderOptions()         # feather, mouth_only_blend, native_pasteback,
                                  # temporal_smooth, mouth_sharpen, smooth_alpha, patch_lowpass
 
