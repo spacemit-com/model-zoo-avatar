@@ -22,8 +22,8 @@
 张量均为 FP32，UNet 的 INT8 为图内量化。每个人物的 UNet 须与该人物的 750 帧底图和关键点配套使用，不支持直接换成任意人像。处理流程：
 
 ```text
-WAV ──avatar_worker extract──▶ 特征文件（FTF1）──avatar_worker render──▶ PNG 帧 ──ffmpeg──▶ mp4
-       FeatherHuBERT（CPU）                     UNet（SpaceMIT EP）+ 人脸预处理 + 贴回
+WAV ──avatar_worker extract──▶ 特征文件（FTF1）──avatar_worker render──▶ mp4（或 PNG 帧）
+       FeatherHuBERT（CPU）                     UNet（SpaceMIT EP）+ 人脸预处理 + 贴回 + ffmpeg 编码
 ```
 
 接口详见 [API.md](API.md)，实现细节见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
@@ -195,15 +195,43 @@ target_link_libraries(your_target PRIVATE avatar)
 
 使用约束：模型实例不可并发调用，`final` 之后须 `Reset()` 才能继续输入；`AvatarService` 的两个 worker 进程相互隔离，取消或失败时已写出的部分 PNG 不能当作完整结果。
 
-### 3.3. 配置参数
+### 3.3. 命令行渲染
 
-**命令行渲染**：`avatar_worker` 分两阶段离线渲染，`render` 阶段流水线并行，Python 的 `AvatarService` 内部也调用它。在组件目录下执行：
+`avatar_worker` 分两阶段离线渲染：`extract` 用 FeatherHuBERT 把 WAV 转成特征文件，`render` 流水线渲染并直接输出带音频的 mp4（需已安装 ffmpeg）。Python 的 `AvatarService` 内部也调用它。在组件目录下执行：
 
 ```bash
-mkdir -p output
-avatar_worker extract --config configs/feifan.yaml   --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/feifan.ftf
-avatar_worker render --config configs/feifan.yaml --features output/feifan.ftf --output output/feifan-worker-frames
+avatar_worker extract --config configs/feifan.yaml \
+  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/feifan.ftf
+avatar_worker render --config configs/feifan.yaml --features output/feifan.ftf \
+  --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/feifan-worker.mp4
 ```
+
+- `--output` 以 `.mp4` 结尾时，帧不写盘，直接送入 ffmpeg 编码（libx264 veryfast）；`--audio` 加入音轨，须与 `extract` 使用的音频相同，省略时生成无声视频。
+- `--output` 为目录时输出 `00000000.png` 起的 PNG 帧序列。
+- 输出的上级目录会自动创建；已存在的 mp4 或特征文件不会被覆盖；失败或按 Ctrl+C 取消时不留下不完整的文件。
+
+两个命令结束时都会打印性能报告。K3 上 `render` 的输出示例：
+
+```text
+avatar_worker render: 225 frames, 9.00 s of video -> output/feifan-worker.mp4
+  total      8.76 s  (model load 0.32 s, render 8.14 s, ffmpeg finish 0.28 s)
+  speed      26.7 fps, steady 28.3 fps, RTF 0.935 (model load excluded)
+  per frame  decode 9.8 | landmarks 0.2 | preprocess 3.1 | UNet 35.9 | compose 6.2 | to ffmpeg 5.2 ms
+  encoder    ffmpeg libx264 veryfast, 112.0 ms CPU per frame
+  bottleneck UNet, at most 27.8 fps
+```
+
+| 字段 | 含义 |
+|------|------|
+| `total` | 命令总耗时，括号内为模型加载、流水线渲染、ffmpeg 收尾（编码剩余帧并写入文件） |
+| `speed` | 渲染速度（不含模型加载）；`steady` 为第一帧之后的稳态帧率；`RTF` 为处理时间 ÷ 视频时长，小于 1 即快于实时 |
+| `per frame` | 各环节每帧平均耗时：解码底帧、读关键点、人脸预处理、UNet 推理、贴回合成、送入 ffmpeg（输出目录时为写 PNG） |
+| `encoder` | ffmpeg 编码每帧消耗的 CPU 时间（多线程累计） |
+| `bottleneck` | 各环节按自身线程数能达到的最高帧率中最低的一项，即当前的速度上限 |
+
+报告输出到 stderr；stdout 的最后一行是同样指标的 JSON（字段见 [API.md](API.md)），`AvatarService` 的 `render_metrics` 即来自这一行。
+
+### 3.4. 配置参数
 
 `avatar_worker` 与 `AvatarService` 读取 YAML 配置（`schema: 1`），自带 `configs/feifan.yaml`、`configs/zihan.yaml`。路径支持 `~/` 与相对配置文件的相对路径。
 
@@ -232,7 +260,7 @@ avatar_worker render --config configs/feifan.yaml --features output/feifan.ftf -
 | --- | --- | --- |
 | 下载报 404 或校验失败 | 资源地址变更或本地仓库较旧 | 更新仓库后重新下载；`--force` 替换内容不同的旧文件。 |
 | 提示 WAV 格式不支持 | 采样率或声道不符 | 用 `ffmpeg -i in.wav -ar 16000 -ac 1 -c:a pcm_s16le out.wav` 转换。 |
-| 提示输出目录非空或 `Video already exists` | 不覆盖上次的结果 | 删除旧的 `output/<人物>-frames/` 与 mp4，或用 `--output`、`--video` 指定新位置。 |
+| 提示输出目录非空、`Video already exists` 或 `Feature file already exists` | 不覆盖上次的结果 | 删除旧的 `output/<人物>-frames/` 与 mp4，或用 `--output`、`--video` 指定新位置。 |
 | 只有帧，提示 `ffmpeg not found` | 未安装 ffmpeg | `sudo apt install ffmpeg` 后重新运行示例。 |
 | `This build has no SpaceMIT EP` | 构建时未找到 SpaceMIT EP | 安装 `spacemit-onnxruntime` 后重新构建。 |
 | 8–15 号核上都有 EP 线程 | 系统 EP 2.0.8 在每个 A100 核各起一个线程 | 正常现象：只有 A100 8、9 上的 2 个线程在计算，其余空闲。 |
@@ -260,19 +288,19 @@ avatar_worker render --config configs/feifan.yaml --features output/feifan.ftf -
 
 ## 8. 附录：性能指标
 
-以下数据基于 K3 平台（Bianbu 4.0，系统 `spacemit-onnxruntime` 2.0.8，自带配置）实测，渲染时间包含写 PNG。
+以下数据基于 K3 平台（Bianbu 4.0，系统 `spacemit-onnxruntime` 2.0.8，自带配置）实测：用 [3.3](#33-命令行渲染) 的两条命令直接生成带音频的 mp4，数字取自命令打印的性能报告。
 
-| 人物 | 测试音频 | 帧数 | 特征提取（CPU） | 渲染（含进程启动） | 稳态渲染 |
-|------|----------|------|-----------------|--------------------|----------|
-| zihan | `zihan_test.wav`（5.6 s） | 140 | 1.0 s | 5.5 s（25.3 fps） | 约 29 fps |
-| feifan | `feifan_test.wav`（9.0 s） | 225 | 1.3 s | 8.3 s（26.9 fps） | 约 29 fps |
+| 人物 | 测试音频 | 帧数 | 特征提取（含模型加载） | 渲染为 mp4（含模型加载与编码） | 渲染速度 | 稳态 |
+|------|----------|------|------------------------|--------------------------------|----------|------|
+| zihan | `zihan_test.wav`（5.6 s） | 140 | 0.77 s（RTF 0.11） | 5.66 s | 26.3 fps | 29.0 fps |
+| feifan | `feifan_test.wav`（9.0 s） | 225 | 1.06 s（RTF 0.10） | 8.76 s | 26.7 fps | 28.3 fps |
 
-单帧各环节耗时（串行测量）如下；流水线使解码、预处理、贴回与写 PNG 和 UNet 推理并行，吞吐接近推理上限（约 29.5 fps）。
+feifan 单帧各环节耗时（流水线中各线程实测）：
 
-| 解码底帧 | 关键点 | 人脸预处理 | UNet 推理（EP） | 贴回合成 | 写 PNG |
-|----------|--------|------------|-----------------|----------|--------|
-| 9.5 ms | 0.6 ms | 3.2 ms | 33.9 ms | 3.7 ms | 27.0 ms |
+| 解码底帧 | 关键点 | 人脸预处理 | UNet 推理（EP） | 贴回合成 | 送入 ffmpeg | ffmpeg 编码 |
+|----------|--------|------------|-----------------|----------|-------------|-------------|
+| 9.8 ms | 0.2 ms | 3.1 ms | 35.9 ms | 6.2 ms | 5.2 ms | 112 ms CPU（多线程） |
 
-**复现方法**：在组件目录下按 [3.3](#33-配置参数) 用 `avatar_worker` 两阶段渲染，`render` 输出的 `elapsed_ms` 即渲染时间。`avatar_file_demo` 为便于阅读逐帧串行执行，不用于测速。
+UNet 推理是瓶颈，其余环节在 X100 上与它并行。输出 PNG 帧（`--output` 为目录）时不编码视频，UNet 为 33.9 ms，渲染约 29 fps；生成 mp4 时 libx264 与 UNet 的 CPU 部分共用 X100，UNet 约慢 2 ms。降低 ffmpeg 优先级或限制其线程数实测没有改善。`avatar_file_demo` 为便于阅读逐帧串行执行，不用于测速。
 
-**说明**：`avatar_worker render` 将每帧拆为预取（解码底帧、计算模型输入）、UNet 推理、按帧序贴回、多线程写 PNG 四段并行执行，输出与逐帧串行处理逐字节一致。FeatherHuBERT 及 worker 的 CPU 线程运行在 X100 0–7；系统 EP 2.0.8 自行放置 A100 线程，在每个 A100 核各起一个、计算只在 A100 8、9 上进行。
+**说明**：`avatar_worker render` 将每帧拆为预取（解码底帧、计算模型输入）、UNet 推理、按帧序贴回、写出（多线程写 PNG，或按帧序送入 ffmpeg）四段并行执行，输出与逐帧串行处理逐字节一致。FeatherHuBERT 及 worker 的 CPU 线程运行在 X100 0–7；系统 EP 2.0.8 自行放置 A100 线程，在每个 A100 核各起一个、计算只在 A100 8、9 上进行。
