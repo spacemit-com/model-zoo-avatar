@@ -181,8 +181,8 @@ class AvatarService:
 class RenderResult:
     output_dir: Path
     frames: int
-    extract_metrics: dict   # {"ok", "frames", "elapsed_ms"}
-    render_metrics: dict
+    extract_metrics: dict   # avatar_worker extract 的 JSON 结果，见“命令行 avatar_worker”
+    render_metrics: dict    # avatar_worker render 的 JSON 结果（fps、stage_ms 等）
 
 # =============================================================================
 # RuntimeOptions / RenderOptions - 字段与 C++ 同名
@@ -258,10 +258,17 @@ for window in batch.windows:
 
 ```bash
 avatar_worker extract --config CONFIG --audio WAV --output FEATURES.ftf
-avatar_worker render  --config CONFIG --features FEATURES.ftf --output DIR [--max-frames N]
+avatar_worker render  --config CONFIG --features FEATURES.ftf --output VIDEO.mp4|DIR [--audio WAV] [--max-frames N]
 ```
 
-成功时向标准输出打印 `{"ok":true,"frames":N,"elapsed_ms":T}`，失败或收到 SIGTERM/SIGINT 时返回 2。`render` 输出 `00000000.png` 起的连续帧，目录须不存在或为空。
+`render` 的 `--output` 以 `.mp4` 结尾时，帧直接送入 ffmpeg 编码为 H.264 视频，`--audio` 加入 AAC 音轨（须与 extract 的音频相同，否则报错）；为目录时输出 `00000000.png` 起的连续帧，目录须不存在或为空。输入在加载模型前检查；失败或收到 SIGTERM/SIGINT 时返回 2，不留下未完成的 mp4 或特征文件。
+
+两个命令结束时在 stderr 打印性能报告（见 README 3.3），在 stdout 打印一行 JSON：
+
+- extract：`{"ok":true,"frames":N,"elapsed_ms":T,"load_ms":…,"extract_ms":…,"audio_s":…,"rtf":…}`
+- render：`{"ok":true,"frames":N,"elapsed_ms":T,"load_ms":…,"render_ms":…,"finish_ms":…,"fps":…,"steady_fps":…,"rtf":…,"stage_ms":{"decode":…,"landmarks":…,"preprocess":…,"unet":…,"compose":…,"write":…},"encoder_cpu_ms":…}`，`encoder_cpu_ms` 仅在输出 mp4 时出现
+
+时间单位为毫秒（`audio_s` 为秒），`stage_ms` 为各环节每帧平均耗时，`rtf` 为处理时间 ÷ 音视频时长（不含模型加载）。
 
 ---
 
