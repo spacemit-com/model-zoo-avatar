@@ -93,13 +93,13 @@ python scripts\download_resources.py assets --persona feifan --frames 0
 ```bash
 source build/envsetup.sh
 cd avatar
-mm -py
+mm
 ```
 
-构建产物安装到 `output/staging`，wheel 包输出到 SDK 根目录下的 `output/wheels/avatar/`，例如：
+构建完成后，除安装到 `output/staging` 外，wheel 包也会输出到 SDK 根目录下的 `output/dist/`，复用本次编译的扩展、`libavatar` 与 `avatar_worker`，不重复编译。例如：
 
 ```bash
-output/wheels/avatar/spacemit_avatar-0.1.0-cp314-cp314-linux_riscv64.whl
+output/dist/spacemit_avatar-0.1.0-cp314-cp314-linux_riscv64.whl
 ```
 
 **运行**：运行前在 SDK 根目录执行 `source build/envsetup.sh`，使 PATH 与库路径指向 `output/staging`，然后在组件目录下执行：
@@ -119,7 +119,7 @@ ffmpeg -framerate 25 -i output/feifan-frames/%08d.png \
 **Python 文件渲染**（推荐先在虚拟环境中安装 wheel 包，wheel 内含 `avatar_worker`）：
 ```bash
 python3 -m venv --system-site-packages .venv && source .venv/bin/activate
-pip install --no-deps ../output/wheels/avatar/spacemit_avatar-0.1.0-*.whl
+pip install --no-deps ../output/dist/spacemit_avatar-0.1.0-*.whl
 python examples/python/render_file.py --config configs/feifan.yaml \
   --audio ~/.cache/assets/avatar/audio/feifan_test.wav --output output/python-frames
 ```
@@ -165,7 +165,7 @@ python examples/python/render_file.py --config configs/feifan.yaml \
 | `include/avatar_service.h` | **C++ API 头文件**，应用侧只需包含此头文件并链接下方库即可调用 |
 | `libavatar.so` | C++ 核心库（SDK：`output/staging/lib/`；独立构建：`build/`） |
 | `avatar_worker` | 离线文件渲染命令行（SDK：`output/staging/bin/`；独立构建：`build/`） |
-| `spacemit_avatar-0.1.0-*.whl` | Python wheel 包（SDK：`output/wheels/avatar/`；独立构建：`dist/`），`pip install` 后 `import spacemit_avatar` |
+| `spacemit_avatar-0.1.0-*.whl` | Python wheel 包（SDK：`output/dist/`；独立构建：`python -m build` 输出到 `dist/`，或配置时加 `-DAVATAR_BUILD_WHEEL=ON`），`pip install` 后 `import spacemit_avatar` |
 
 示例程序（非集成必需）：`examples/cpp/run_pipeline.sh`、`examples/python/render_file.py`。运行与验证步骤见 [2.3.1](#231-在-sdk-中验证) 或 [2.3.2](#232-独立构建下验证)。
 

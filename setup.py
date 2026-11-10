@@ -1,5 +1,5 @@
 from pathlib import Path
-import os,subprocess
+import os,shutil,subprocess
 from setuptools import setup,Extension,find_packages
 from setuptools.command.build_ext import build_ext
 
@@ -7,6 +7,16 @@ ROOT=Path(__file__).resolve().parent
 class CMakeBuild(build_ext):
     def build_extension(self,ext):
         import sys
+        prebuilt=os.environ.get('AVATAR_PREBUILT_DIR')
+        if prebuilt:
+            # The SDK build already compiled the extension, libavatar and avatar_worker
+            # with RPATHs that suit the package layout; package them unchanged.
+            source=Path(prebuilt).resolve();dest=Path(self.get_ext_fullpath(ext.name)).resolve().parent
+            files=[p for p in source.rglob('*') if p.is_file()]
+            if not files:raise FileNotFoundError(f'No prebuilt files in {source}')
+            for item in files:
+                target=dest/item.relative_to(source);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(item,target)
+            return
         build=Path(self.build_temp).resolve()/ext.name.replace('.','_');build.mkdir(parents=True,exist_ok=True)
         dest=Path(self.build_lib).resolve()
         args=['cmake','-S',str(ROOT),'-B',str(build),'-DCMAKE_BUILD_TYPE=Release',

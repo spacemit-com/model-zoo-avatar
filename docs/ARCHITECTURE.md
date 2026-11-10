@@ -23,4 +23,4 @@
 
 ## 构建和发布
 
-C++17、CMake、可选pybind11、PEP517 setuptools后端。VERSION是构建版本来源。模型和assets独立下载；不因import Python包联网。资源版本与软件版本分开固定，模型和素材通过SHA256绑定。代码以Apache-2.0发布；模型权重的再分发条款见MODEL_CARD.md。
+C++17、CMake、可选pybind11、PEP517 setuptools后端。在SDK中构建时（envsetup导出 `SROBOTIS_OUTPUT_ROOT`），CMake的 `avatar-python-wheel` 目标用本次编译的扩展、libavatar与worker打包wheel并安装到 `output/dist`，不重复编译；这些二进制的RPATH同时覆盖构建目录、wheel与安装前缀三种布局。VERSION是构建版本来源。模型和assets独立下载；不因import Python包联网。资源版本与软件版本分开固定，模型和素材通过SHA256绑定。代码以Apache-2.0发布；模型权重的再分发条款见MODEL_CARD.md。

@@ -16,6 +16,14 @@ include(CTest)
 include(GNUInstallDirs)
 option(BUILD_PYTHON_BINDINGS "Build pybind11 extension" ON)
 option(AVATAR_WHEEL_LAYOUT "Install libraries and worker into Python package" OFF)
+# envsetup.sh exports SROBOTIS_OUTPUT_ROOT for SDK builds, where `mm` also
+# builds the Python wheel into ${SROBOTIS_OUTPUT_ROOT}/dist as vad and kws do.
+if(DEFINED ENV{SROBOTIS_OUTPUT_ROOT} AND NOT "$ENV{SROBOTIS_OUTPUT_ROOT}" STREQUAL "")
+  set(AVATAR_IN_SDK_BUILD ON)
+else()
+  set(AVATAR_IN_SDK_BUILD OFF)
+endif()
+option(AVATAR_BUILD_WHEEL "Package this build's binaries as a Python wheel" ${AVATAR_IN_SDK_BUILD})
 find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h PATH_SUFFIXES onnxruntime REQUIRED)
 find_path(OPENCV_INCLUDE_DIR opencv2/core.hpp PATH_SUFFIXES opencv4 REQUIRED)
 foreach(component core imgproc imgcodecs)
@@ -41,7 +49,12 @@ else()
   set_target_properties(avatar PROPERTIES VERSION ${PROJECT_VERSION})
   set(AVATAR_LIB_DEST ${CMAKE_INSTALL_LIBDIR})
   set(AVATAR_BIN_DEST ${CMAKE_INSTALL_BINDIR})
-  set_target_properties(avatar_worker PROPERTIES INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+  # The same binaries find libavatar in the build tree ($ORIGIN), in the wheel
+  # (worker in bin/, $ORIGIN/..) and in the install prefix, so the wheel can
+  # package them without relinking.
+  set_target_properties(avatar avatar_worker PROPERTIES BUILD_WITH_INSTALL_RPATH ON)
+  set_target_properties(avatar_worker PROPERTIES
+    INSTALL_RPATH "$ORIGIN;$ORIGIN/..;$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif()
 if(AVATAR_WHEEL_LAYOUT)
   install(TARGETS avatar LIBRARY DESTINATION ${AVATAR_LIB_DEST} NAMELINK_SKIP)
@@ -68,12 +81,51 @@ if(BUILD_PYTHON_BINDINGS)
     endif()
     set(AVATAR_PYTHON_DEST "${AVATAR_PYTHON_INSTALL_DIR}/spacemit_avatar")
     file(RELATIVE_PATH AVATAR_PYTHON_TO_LIB "/${AVATAR_PYTHON_DEST}" "/${CMAKE_INSTALL_LIBDIR}")
-    set(AVATAR_PYTHON_RPATH "$ORIGIN/${AVATAR_PYTHON_TO_LIB}")
+    set(AVATAR_PYTHON_RPATH "$ORIGIN;$ORIGIN/${AVATAR_PYTHON_TO_LIB}")
+    set_target_properties(_spacemit_avatar PROPERTIES BUILD_WITH_INSTALL_RPATH ON)
     install(FILES python/spacemit_avatar/__init__.py python/spacemit_avatar/pipeline.py
             DESTINATION ${AVATAR_PYTHON_DEST})
   endif()
   set_target_properties(_spacemit_avatar PROPERTIES INSTALL_RPATH "${AVATAR_PYTHON_RPATH}")
   install(TARGETS _spacemit_avatar LIBRARY DESTINATION ${AVATAR_PYTHON_DEST})
+  if(AVATAR_BUILD_WHEEL AND NOT AVATAR_WHEEL_LAYOUT)
+    # Package the extension, libavatar and avatar_worker built above instead of
+    # compiling them again; setup.py copies them from AVATAR_PREBUILT_DIR.
+    set(AVATAR_WHEEL_ROOT "${CMAKE_BINARY_DIR}/python_wheel")
+    set(AVATAR_WHEEL_SOURCE "${AVATAR_WHEEL_ROOT}/src")
+    set(AVATAR_WHEEL_PREBUILT "${AVATAR_WHEEL_ROOT}/prebuilt")
+    set(AVATAR_WHEEL_OUTPUT "${AVATAR_WHEEL_ROOT}/dist")
+    set(AVATAR_WHEEL_STAMP "${AVATAR_WHEEL_ROOT}/wheel.stamp")
+    if(AVATAR_IN_SDK_BUILD)
+      set(AVATAR_DIST_INSTALL_DIR "$ENV{SROBOTIS_OUTPUT_ROOT}/dist")
+    else()
+      get_filename_component(AVATAR_DIST_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/../dist" ABSOLUTE)
+    endif()
+    set(AVATAR_WHEEL_INPUTS
+      ${CMAKE_CURRENT_SOURCE_DIR}/setup.py ${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml
+      ${CMAKE_CURRENT_SOURCE_DIR}/VERSION ${CMAKE_CURRENT_SOURCE_DIR}/README.md
+      ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE ${CMAKE_CURRENT_SOURCE_DIR}/NOTICE)
+    add_custom_command(
+      OUTPUT ${AVATAR_WHEEL_STAMP}
+      COMMAND ${CMAKE_COMMAND} -E rm -rf ${AVATAR_WHEEL_SOURCE} ${AVATAR_WHEEL_PREBUILT} ${AVATAR_WHEEL_OUTPUT}
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${AVATAR_WHEEL_SOURCE} ${AVATAR_WHEEL_PREBUILT}/bin ${AVATAR_WHEEL_OUTPUT}
+      COMMAND ${CMAKE_COMMAND} -E copy ${AVATAR_WHEEL_INPUTS} ${AVATAR_WHEEL_SOURCE}
+      COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/python/spacemit_avatar ${AVATAR_WHEEL_SOURCE}/python/spacemit_avatar
+      COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:_spacemit_avatar> ${AVATAR_WHEEL_PREBUILT}
+      COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:avatar> ${AVATAR_WHEEL_PREBUILT}/$<TARGET_SONAME_FILE_NAME:avatar>
+      COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:avatar_worker> ${AVATAR_WHEEL_PREBUILT}/bin
+      COMMAND ${CMAKE_COMMAND} -E env AVATAR_PREBUILT_DIR=${AVATAR_WHEEL_PREBUILT}
+              ${Python3_EXECUTABLE} -m build --wheel --no-isolation --outdir ${AVATAR_WHEEL_OUTPUT} ${AVATAR_WHEEL_SOURCE}
+      COMMAND ${CMAKE_COMMAND} -E touch ${AVATAR_WHEEL_STAMP}
+      DEPENDS _spacemit_avatar avatar avatar_worker ${AVATAR_WHEEL_INPUTS}
+              ${CMAKE_CURRENT_SOURCE_DIR}/python/spacemit_avatar/__init__.py
+              ${CMAKE_CURRENT_SOURCE_DIR}/python/spacemit_avatar/pipeline.py
+      VERBATIM
+      COMMENT "Building spacemit_avatar wheel into ${AVATAR_WHEEL_OUTPUT}")
+    add_custom_target(avatar-python-wheel ALL DEPENDS ${AVATAR_WHEEL_STAMP})
+    install(DIRECTORY ${AVATAR_WHEEL_OUTPUT}/ DESTINATION ${AVATAR_DIST_INSTALL_DIR}
+            FILES_MATCHING PATTERN "*.whl")
+  endif()
 endif()
 if(BUILD_TESTING)
   add_subdirectory(tests)
