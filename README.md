@@ -7,11 +7,11 @@
 | 类别 | 支持 |
 | --- | --- |
 | 部署方式 | **本地**（ONNX 推理），离线两阶段：先提取音频特征，再逐帧渲染 |
-| 推理后端 | CPU；K3 上 UNet 可选 SpaceMIT EP |
+| 推理后端 | FeatherHuBERT：CPU；人物 UNet：SpaceMIT EP（系统 `spacemit-onnxruntime`） |
 | 人物 | `zihan`（函姐）、`feifan`（进迭小哥） |
-| 输入 / 输出 | 16 kHz 单声道 PCM16 WAV → 25 fps 的 PNG 帧序列 |
+| 输入 / 输出 | 16 kHz 单声道 PCM16 WAV → 25 fps 的 PNG 帧序列，K3 上渲染约 29 fps |
 | 接口 | C++（`include/avatar_service.h`，命名空间 `SpacemiT::avatar`）、Python（`spacemit_avatar`）、命令行 `avatar_worker` |
-| 平台 | Linux；已在 K3 / Bianbu 4.0 / Python 3.14 实机验证。Windows 仅支持下载器与主机测试 |
+| 平台 | SpacemiT K3 / Bianbu 4.0 / Python 3.14。Windows 仅支持下载器与主机测试 |
 
 模型：
 
@@ -26,7 +26,7 @@ UNet 的 INT8 是图内量化，公开张量仍为 FP32。每个人物的 UNet �
 
 ```text
 WAV ──avatar_worker extract──▶ 特征文件（FTF1）──avatar_worker render──▶ PNG 帧 ──ffmpeg──▶ mp4
-       FeatherHuBERT（CPU）                     UNet + 人脸预处理 + 贴回
+       FeatherHuBERT（CPU）                     UNet（SpaceMIT EP）+ 人脸预处理 + 贴回
 ```
 
 实现细节见 [实现与运行边界](docs/ARCHITECTURE.md)。
@@ -38,10 +38,10 @@ WAV ──avatar_worker extract──▶ 特征文件（FTF1）──avatar_work
 ### 2.1. 安装依赖
 
 - **编译环境**：CMake ≥ 3.18，C++17 编译器，Linux。
-- **必选**：OpenCV（core、imgproc、imgcodecs）、yaml-cpp、ONNX Runtime 头文件与运行库。
+- **必选**：OpenCV（core、imgproc、imgcodecs）、yaml-cpp、`spacemit-onnxruntime`（ONNX Runtime 与 SpaceMIT EP 的头文件和运行库）。
 - **可选**：pybind11（Python 绑定）、zstd 或 python3-zstandard（解压资源）、FFmpeg（把帧合成视频）。
 
-K3 / Bianbu 4.0 上全部使用系统软件包，其中 ONNX Runtime 与 SpaceMIT EP 来自 `spacemit-onnxruntime`：
+K3 / Bianbu 4.0 上全部使用系统软件包：
 
 ```bash
 sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config \
@@ -50,7 +50,7 @@ sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config \
   python3-numpy python3-yaml zstd ffmpeg spacemit-onnxruntime
 ```
 
-ONNX Runtime 头文件不在默认路径时，配置时加 `-DONNXRUNTIME_INCLUDE_DIR=/path/to/include`。运行库在运行时按配置文件加载，不在构建时链接。
+运行时按配置加载系统的 `libonnxruntime.so` 与 `libspacemit_ep.so`，构建时不链接。头文件不在默认路径时，配置时加 `-DONNXRUNTIME_INCLUDE_DIR=/path/to/include`。
 
 ### 2.2. 下载模型
 
@@ -86,18 +86,18 @@ ctest --test-dir build --output-on-failure
 export AVATAR_WORKER="$PWD/build/avatar_worker"
 ```
 
-用 CPU 为两个人物生成口型视频：
+为两个人物生成口型视频：
 
 ```bash
 # 进迭小哥
-bash examples/cpp/run_pipeline.sh configs/cpu.yaml \
+bash examples/cpp/run_pipeline.sh configs/feifan.yaml \
   ~/.cache/assets/avatar/audio/feifan_test.wav output/feifan-frames
 ffmpeg -framerate 25 -i output/feifan-frames/%08d.png \
   -i ~/.cache/assets/avatar/audio/feifan_test.wav \
   -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest output/feifan.mp4
 
 # 函姐
-bash examples/cpp/run_pipeline.sh configs/zihan.cpu.yaml \
+bash examples/cpp/run_pipeline.sh configs/zihan.yaml \
   ~/.cache/assets/avatar/audio/zihan_test.wav output/zihan-frames
 ffmpeg -framerate 25 -i output/zihan-frames/%08d.png \
   -i ~/.cache/assets/avatar/audio/zihan_test.wav \
@@ -106,15 +106,9 @@ ffmpeg -framerate 25 -i output/zihan-frames/%08d.png \
 
 输出目录必须不存在或为空。视频帧数为 `ceil(PCM 样本数 / 640)`，底帧按 0→749→0 往返使用。
 
-**K3 上使用 SpaceMIT EP**：`configs/k3.yaml` 与 `configs/zihan.k3.yaml` 的核分配与 bianbu-avatar 长对话配置一致——FeatherHuBERT 在 X100 0–7 用 CPU 4 线程；UNet worker 及 ORT 的 4 个 CPU 回退线程在 X100 0–7，2 个 EP 线程在 A100 12、13（bianbu-avatar 默认配置为 10、11）。只设置 `ep_affinity` 不能把 EP 限定在这两个核上，需要像 bianbu-avatar 的 systemd 服务一样在受限 cgroup 中运行：
+**核分配**：FeatherHuBERT 在 X100 0–7 用 CPU 4 线程。UNet 使用 SpaceMIT EP 的 2 个计算线程；worker 进程、ORT 处理 EP 不支持节点的 4 个 CPU 线程以及渲染流水线线程都在 X100 0–7。系统 EP 2.0.8 自行放置 A100 线程：每个 A100 核各起一个，计算只在 A100 8、9 上进行，`ep_affinity` 不生效，因此配置中不设置。
 
-```bash
-sudo systemd-run --scope -p AllowedCPUs=0-7,12-13 \
-  env AVATAR_WORKER="$AVATAR_WORKER" \
-  bash examples/cpp/run_pipeline.sh configs/k3.yaml /path/to/feifan_test.wav output/feifan-ep
-```
-
-`sudo` 下 `~` 指向 `/root`，请把配置和命令中的路径改成绝对路径。K3 实测严格限定两个核需要 bianbu-avatar 随包的 EP 2.0.7 运行库（在配置中把 `ort_library`、`ep_library` 指向它）；系统 EP 2.0.8 可以加速，但在受限 cgroup 中仍会在其它 A100 核上起线程。示例不修改主机核分配，也不会自动占用其它推理服务的核。
+**渲染流水线**：`avatar_worker render` 把每帧拆成预取（解码底帧、计算模型输入）、UNet 推理、按帧序贴回合成、多线程写 PNG 四段并行执行，推理期间 X100 同时处理前后帧。贴回在同一份后处理状态上按帧序进行，输出与逐帧串行处理逐字节一致。
 
 更完整的测试入口（与 `test.yaml` 一致）：
 
@@ -154,7 +148,7 @@ python -m build --wheel --no-isolation
 python -m pip install --no-deps dist/spacemit_avatar-*.whl
 ```
 
-wheel 标签为 `cp314-cp314-linux_riscv64`，运行时使用系统 OpenCV、yaml-cpp 和配置指定的 ORT。
+wheel 标签为 `cp314-cp314-linux_riscv64`，运行时使用系统 OpenCV、yaml-cpp 和 `spacemit-onnxruntime`。
 
 ### 3.2. API 使用
 
@@ -165,7 +159,7 @@ import os
 from spacemit_avatar import AvatarService
 
 audio = os.path.expanduser("~/.cache/assets/avatar/audio/feifan_test.wav")
-with AvatarService("configs/cpu.yaml") as engine:
+with AvatarService("configs/feifan.yaml") as engine:
     result = engine.render_file(audio, "output/python-frames")
     print(result.frames, result.extract_metrics, result.render_metrics)
 ```
@@ -178,14 +172,14 @@ worker 默认从包内 `bin/` 或 `AVATAR_WORKER` 查找。取消是协作式的
 import numpy as np
 from spacemit_avatar import RuntimeOptions, FeatherHubertExtractor
 
-options = RuntimeOptions()  # 默认 CPU、4 线程、libonnxruntime.so
+options = RuntimeOptions()  # FeatherHuBERT 使用默认的 CPU、4 线程、libonnxruntime.so
 extractor = FeatherHubertExtractor("/path/to/feather_hubert_dynamic.onnx", options)
 batch = extractor.push_pcm(np.zeros(16000, dtype=np.int16), final=True)
 print(batch.windows.shape, batch.frame_ids)  # [N,16,32,32]
 extractor.reset()
 ```
 
-其余低层类：`UnetLipGenerator.infer(image, audio)`、`PreparedFrame(bgr, landmarks, options)` 的 `image_tensor`、`face_rect`、`set_frame`、`compose(output)`。
+其余低层类：`UnetLipGenerator.infer(image, audio)`、`PreparedFrame(bgr, landmarks, options)` 的 `image_tensor`、`face_rect`、`set_frame`、`compose(output)`。UNet 的 `RuntimeOptions` 设置 `provider = "spacemit"`。
 
 **C++**：
 
@@ -195,9 +189,12 @@ extractor.reset()
 using namespace SpacemiT::avatar;
 
 int main() {
-    RuntimeOptions cpu;  // provider = "cpu"，threads = 4
-    FeatherHubertExtractor hubert("feather_hubert_dynamic.onnx", cpu);
-    UnetLipGenerator unet("feifan_int8.onnx", cpu);
+    RuntimeOptions hubert_options;          // CPU，4 线程
+    RuntimeOptions unet_options;
+    unet_options.provider = "spacemit";     // 系统 libspacemit_ep.so
+    unet_options.ep_threads = 2;
+    FeatherHubertExtractor hubert("feather_hubert_dynamic.onnx", hubert_options);
+    UnetLipGenerator unet("feifan_int8.onnx", unet_options);
 
     auto pcm = ReadWav16k("feifan_test.wav");
     auto batch = hubert.PushPcm(pcm.data(), pcm.size(), /*final=*/true);
@@ -213,12 +210,12 @@ int main() {
 }
 ```
 
-示例为简洁起见固定使用一张底帧；`avatar_worker` 会按帧轮换底帧，并在结尾补齐静音特征。
+示例为简洁起见固定使用一张底帧并串行执行；`avatar_worker` 会按帧轮换底帧、用流水线并行处理，并在结尾补齐静音特征。
 
 使用约束：
 
 - 模型实例不可并发调用；`final` 之后须 `Reset()` 才能继续输入。
-- 同一进程只能加载一套 ORT，选择不同路径会报错；需要混用时使用 `AvatarService`（两个 worker 进程相互隔离），并可用 `AVATAR_HUBERT_LIBRARY_DIR`、`AVATAR_UNET_LIBRARY_DIR` 仅为对应子进程设置库搜索路径。
+- 同一进程只能加载一套 ORT，选择不同路径会报错；两个模型使用同一个 `libonnxruntime.so`。`AvatarService` 的两个 worker 进程相互隔离，可用 `AVATAR_HUBERT_LIBRARY_DIR`、`AVATAR_UNET_LIBRARY_DIR` 仅为对应子进程设置库搜索路径。
 - Python 绑定在推理时释放 GIL，输入输出数组拥有独立内存。
 
 ### 3.3. 配置参数
@@ -229,11 +226,11 @@ int main() {
 | --- | --- | --- |
 | — | `schema` | 固定为 `1` |
 | `hubert` / `unet` | `model` | 模型路径 |
-| | `provider` | `cpu` 或 `spacemit`；FeatherHuBERT 只支持 `cpu` |
-| | `ort_library` | ONNX Runtime 库，默认 `libonnxruntime.so` |
-| | `ep_library` | SpaceMIT EP 库，`provider: spacemit` 时使用，默认 `libspacemit_ep.so` |
-| | `threads` | ORT 线程数；使用 EP 时为 CPU 回退线程数 |
-| | `ep_threads` / `ep_affinity` | EP 线程数与绑定核（如 `"12;13"`），二者数量应一致 |
+| | `provider` | FeatherHuBERT 为 `cpu`；人物 UNet 为 `spacemit` |
+| | `ort_library` | ONNX Runtime 库，默认系统 `libonnxruntime.so` |
+| | `ep_library` | SpaceMIT EP 库，默认系统 `libspacemit_ep.so` |
+| | `threads` | ORT 线程数；UNet 中为处理 EP 不支持节点的 CPU 线程数 |
+| | `ep_threads` | EP 计算线程数，默认 2 |
 | | `cpu_affinity` | 进程绑核列表，如 `[0, 1, 2, 3, 4, 5, 6, 7]` |
 | | `timeout_s` | `AvatarService` 中该阶段的超时，默认 3600 |
 | `assets` | `person` | 人物素材目录，含 `full_body_img/` 与 `landmarks/` |
@@ -242,7 +239,7 @@ int main() {
 | | `mouth_only_blend` | 仅嘴部掩码；关闭原生贴回时生效 |
 | | `mouth_sharpen` / `temporal_smooth` / `smooth_alpha` / `patch_lowpass` | 后处理选项；原生贴回时锐化与时间平滑不生效 |
 
-自带配置：`configs/cpu.yaml`、`configs/zihan.cpu.yaml`（CPU）；`configs/k3.yaml`、`configs/zihan.k3.yaml`（K3 EP）。
+自带配置：`configs/feifan.yaml`、`configs/zihan.yaml`。
 
 ## 4. 常见问题
 
@@ -252,8 +249,8 @@ int main() {
 | 提示 WAV 格式不支持 | 采样率或声道不符 | 用 `ffmpeg -i in.wav -ar 16000 -ac 1 -c:a pcm_s16le out.wav` 转换。 |
 | 提示输出目录非空 | 防止混入旧帧 | 使用新的或空的输出目录。 |
 | `One ORT binary per process` | 同一进程选择了两套 ORT | 两个模型使用同一 `ort_library`，或改用 `AvatarService`。 |
-| EP 线程出现在其它 A100 核 | 未在受限 cgroup 中运行或使用系统 EP 2.0.8 | 按 [2.3](#23-测试) 用 `systemd-run --scope -p AllowedCPUs=…` 并使用 EP 2.0.7 运行库。 |
-| `sudo` 运行找不到模型 | `~` 指向 `/root` | 配置中改用绝对路径。 |
+| 8–15 号核上都有 EP 线程 | 系统 EP 2.0.8 在每个 A100 核各起一个线程 | 正常现象：只有 2 个线程（A100 8、9）在计算，其余空闲。 |
+| 无法加载 `libspacemit_ep.so` | 未安装 `spacemit-onnxruntime` | 安装该软件包，或在配置中写明库的绝对路径。 |
 | 无法解压 `.tar.zst` | 缺少 zstd | 安装 `zstd` 或 `python3-zstandard`。 |
 | Windows 构建失败 | 原生推理只支持 Linux | Windows 仅可运行下载器与 `tests/python` 主机测试。 |
 
@@ -263,7 +260,7 @@ int main() {
 
 | 版本 | 说明 |
 | --- | --- |
-| 0.1.0 | 提供 FeatherHuBERT 与 zihan、feifan 两个人物的 UNet，C++ / Python 接口，CPU 与 SpaceMIT EP，离线示例和人物测试音频。 |
+| 0.1.0 | 提供 FeatherHuBERT 与 zihan、feifan 两个人物的 UNet，C++ / Python 接口，系统 SpaceMIT EP 推理，流水线渲染、离线示例和人物测试音频。 |
 
 ## 6. 贡献方式
 
@@ -279,11 +276,17 @@ int main() {
 
 ## 8. 附录：性能指标
 
-以下数据基于 K3 实测（Bianbu 4.0），离线两阶段，渲染时间包含写 PNG；模型已加载、不含下载。
+以下数据基于 K3 实测（Bianbu 4.0，系统 `spacemit-onnxruntime` 2.0.8，`configs/*.yaml` 默认配置），渲染时间包含写 PNG。
 
-| 人物 | 音频 | 帧数 | 特征提取 | 渲染：CPU（4 线程） | 渲染：EP（2 个 A100 核） |
+| 人物 | 音频 | 帧数 | 特征提取（CPU） | 渲染（含进程启动与模型加载） |
+| --- | --- | --- | --- | --- |
+| zihan | `zihan_test.wav`（5.6 s） | 140 | 1.0 s | 5.5 s（25.3 fps） |
+| feifan | `feifan_test.wav`（9.0 s） | 225 | 1.3 s | 8.3 s（26.9 fps） |
+
+去掉启动开销后渲染稳定在约 29 fps。单帧各环节耗时（串行测量）：
+
+| 解码底帧 | 关键点 | 人脸预处理 | UNet 推理（EP） | 贴回合成 | 写 PNG |
 | --- | --- | --- | --- | --- | --- |
-| zihan | `zihan_test.wav`（5.6 s） | 140 | 1.0 s | 65 s（约 2.2 fps） | 10.2 s（约 14 fps） |
-| feifan | `feifan_test.wav`（9.0 s） | 225 | 1.3 s | 104 s（约 2.2 fps） | 16.1 s（约 14 fps） |
+| 9.5 ms | 0.6 ms | 3.2 ms | 33.9 ms | 3.7 ms | 27.0 ms |
 
-EP 一列使用 bianbu-avatar 随包的 EP 2.0.7，在 `AllowedCPUs=0-7,10-11` 的 cgroup 中运行；EP 与 CPU 输出的 PSNR 在 61 dB 以上。
+串行处理每帧约 78 ms（约 13 fps）；流水线让解码、预处理、贴回和写 PNG 与 UNet 推理并行，吞吐接近推理上限（约 29.5 fps）。
