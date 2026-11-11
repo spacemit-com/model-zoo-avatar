@@ -17,7 +17,7 @@
 ```cpp
 namespace SpacemiT::avatar {
 
-// 每帧音频窗口元素数：8 帧 × 2 × 32 × 32 = [16,32,32]
+// 视频帧 f 的音频窗口：模型帧 f-4 … f+3 共 8 帧 × 2 × 32 × 32 = [16,32,32]
 constexpr std::size_t kWindowElements = 16 * 32 * 32;
 
 // =============================================================================
@@ -49,8 +49,9 @@ class FeatherHubertExtractor {
 public:
     explicit FeatherHubertExtractor(const std::string& model, const RuntimeOptions& options = {});
 
-    // 输入 16 kHz 单声道 PCM16；final=true 时输出保留的尾部帧。
-    // 每 640 个样本对应 1 帧（25 fps）。final 之后须 Reset() 才能继续输入。
+    // 输入 16 kHz 单声道 PCM16，每 640 个样本对应 1 帧（25 fps）。
+    // 非 final 时已收到音频的最后 4 帧（约 160 ms）暂不输出，等后续音频补足上下文；
+    // final=true 时一并输出。final 之后须 Reset() 才能继续输入。
     FeatureBatch PushPcm(const std::int16_t* pcm, std::size_t samples, bool final = false);
     void Reset();
 };

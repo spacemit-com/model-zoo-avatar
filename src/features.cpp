@@ -54,9 +54,11 @@ FeatureBatch FeatureStream::Push(const std::int16_t* pcm, std::size_t n, bool fi
     }
 }
 
-// Runs the model over the latest 20000 samples (1.25 s). Each output window
-// holds 8 model frames (2 tokens each) around its video frame; unless the push
-// is final, the last 4 model frames wait for more audio.
+// Runs the model over the latest 20000 samples (1.25 s); Push() splits new
+// audio into chunks of at most 12000 samples (0.75 s). Two tokens make one
+// model frame, which matches one 40 ms video frame. The window of video frame f
+// holds model frames f-4 to f+3. Unless the push is final, the last 4 model
+// frames are held back and recomputed by the next call with more context.
 FeatureBatch FeatureStream::Chunk(const std::int16_t* pcm, std::size_t n, bool final) {
     for (std::size_t i = 0; i < n; ++i) {
         audio_.push_back(static_cast<float>(pcm[i]) / 32768.0f);

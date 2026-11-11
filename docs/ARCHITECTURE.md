@@ -3,7 +3,7 @@
 ## 分层
 
 - `include/avatar_service.h`：RuntimeOptions、FeatureBatch、流式FeatherHubertExtractor、UnetLipGenerator、PreparedFrame。没有暴露Ort::Value或应用服务对象。
-- `src/features.cpp`：原Python滚动特征算法的C++迁移；12000采样点内部分块、20000采样点滚动上下文、640采样点视频拍、左右4帧上下文、1e-3静音门槛、全局frame id。
+- `src/features.cpp`：原Python滚动特征算法的C++迁移。每次推理把最近20000个采样点（1.25 s）送入模型，新音频按12000个采样点（0.75 s）分块送入，相邻两次推理重叠0.5 s。每640个采样点（40 ms）对应一个视频帧；模型每20 ms输出一个token，2个token组成一个模型帧，与视频帧一一对应。视频帧f的特征窗口是模型帧f-4至f+3（前4帧、当前帧、后3帧，共8帧，即[16,32,32]）；1.25 s的输入保证每个窗口的8帧都来自同一次推理，只在音频开头之前和结尾之后补零。非final时，每次推理的最后4个模型帧不输出，由下一次推理用更长的上下文重新计算后再输出。整个模型输入的标准差低于1e-3时，本次输出全部置零（闭嘴）。frame id全局连续。
 - `src/models.cpp`：两张ONNX图的执行、类型/shape及非有限值检查。
 - `src/runtime.cpp`：用ORT C++ API创建会话选项；provider为 `spacemit` 时通过 `SessionOptionsSpaceMITEnvInit` 启用SpaceMIT EP。构建时链接系统 `spacemit-onnxruntime` 的 `libonnxruntime.so` 与 `libspacemit_ep.so`，不复制运行库到源码或wheel；找不到EP时构建仅CPU的库，并拒绝 `spacemit`。
 - `src/image.cpp`：从旧渲染器提取的11段图像函数及拥有输入、缓冲区、逐流状态的新公共封装。配置显式控制native mask、mouth mask、锐化和时间平滑。
@@ -14,7 +14,7 @@
 
 ## 对等与变化
 
-参考服务保存在 `tests/reference/feature_reference.py`，来源哈希在 `config/source-baseline.json`。同一分块序列逐组比较，不声称不同外部分块方式的特征数值逐位相同。NumPy和C++归约次序可能导致浮点舍入差异，真实模型误差由回归报告量化。
+参考服务保存在 `tests/reference/feature_reference.py`（原样保留，注释中的“one-second context”是旧说法，实际为1.25 s上下文、0.75 s步长），来源哈希在 `config/source-baseline.json`。同一分块序列逐组比较，不声称不同外部分块方式的特征数值逐位相同。NumPy和C++归约次序可能导致浮点舍入差异，真实模型误差由回归报告量化。
 
 低层特征提取器保持原帧数与窗口语义；完成final后要求reset再输入，这是新增的明确生命周期约束。CLI只在最后补闭嘴零特征，使文件示例覆盖完整PCM时长，补帧不属于模型结果。PreparedFrame默认与bianbu-avatar一致：原生贴回直接替换人脸区域，仅在 `native_pasteback` 与 `mouth_only_blend` 都关闭时使用残差合成；没有把它等同于MPP硬件编码或整个数字人播放器。
 
