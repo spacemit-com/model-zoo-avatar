@@ -15,6 +15,7 @@
 
 namespace SpacemiT::avatar {
 
+// Features of video frame f: model frames f-4 to f+3, each 2x32x32.
 constexpr std::size_t kWindowElements = 16 * 32 * 32;
 
 struct RuntimeOptions {
@@ -35,6 +36,8 @@ class FeatherHubertExtractor {
 public:
     explicit FeatherHubertExtractor(const std::string& model, const RuntimeOptions& options = {});
     ~FeatherHubertExtractor();
+    // 16 kHz mono PCM16; one window per 640 samples (25 fps). Unless final, the
+    // last 4 frames (160 ms) wait for more audio; final releases them.
     FeatureBatch PushPcm(const std::int16_t* pcm, std::size_t samples, bool final = false);
     void Reset();
 
